@@ -1101,6 +1101,7 @@ format_room_option(OptionString, ValueString) ->
 		password -> ValueString;
 		subject ->ValueString;
 		subject_author ->ValueString;
+		room_id ->ValueString;
 		presence_broadcast ->misc:expr_to_term(ValueString);
 		max_users -> binary_to_integer(ValueString);
 		voice_request_min_interval -> binary_to_integer(ValueString);

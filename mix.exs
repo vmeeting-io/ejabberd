@@ -30,7 +30,7 @@ defmodule Ejabberd.Mixfile do
                              :fast_tls, :stringprep, :fast_xml, :xmpp, :mqtree,
                              :stun, :fast_yaml, :esip, :jiffy, :p1_oauth2,
                              :eimp, :base64url, :jose, :pkix, :os_mon, :yconf,
-                             :p1_acme, :idna]
+                             :uuid, :p1_acme, :idna]
      ++ cond_apps()]
   end
 
@@ -106,6 +106,7 @@ defmodule Ejabberd.Mixfile do
      {:eimp, "~> 1.0"},
      {:base64url, "~> 0.0.1"},
      {:yconf, "~> 1.0"},
+     {:uuid, "~> 2.0", hex: :uuid_erl},
      {:jose, "~> 1.8"},
      {:idna, "~> 6.0"},
      {:p1_acme, "~> 1.0"}]

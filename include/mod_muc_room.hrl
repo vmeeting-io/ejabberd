@@ -65,7 +65,8 @@
     captcha_whitelist                    = (?SETS):empty() :: gb_sets:set(),
     mam                                  = false :: boolean(),
     pubsub                               = <<"">> :: binary(),
-    lang                                 = ejabberd_option:language() :: binary()
+    lang                                 = ejabberd_option:language() :: binary(),
+    meeting_id                           = <<"">> :: binary()
 }).
 
 -type config() :: #config{}.
@@ -119,7 +120,8 @@
     activity                = treap:empty() :: treap:treap(),
     room_shaper             = none :: ejabberd_shaper:shaper(),
     room_queue              :: p1_queue:queue({message | presence, jid()}) | undefined,
-    hibernate_timer         = none :: reference() | none | hibernating
+    hibernate_timer         = none :: reference() | none | hibernating,
+    room_id                 = <<"">> :: binary()
 }).
 
 -type users() :: #{ljid() => #user{}}.

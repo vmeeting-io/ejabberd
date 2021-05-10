@@ -276,7 +276,8 @@ init([Host, ServerHost, Access, Room, HistorySize,
 		   just_created = true,
 		   room_queue = RoomQueue,
 		   room_shaper = Shaper}),
-    State1 = set_opts(DefRoomOpts, State),
+    State0 = set_opts(DefRoomOpts, State),
+    State1 = ejabberd_hooks:run_fold(vm_start_room, ServerHost, State0, [ServerHost, Room, Host]),
     store_room(State1),
     ?INFO_MSG("Created MUC room ~ts@~ts by ~ts",
 	      [Room, Host, jid:encode(Creator)]),
@@ -909,7 +910,9 @@ terminate(Reason, _StateName,
 		add_to_log(room_existence, stopped, StateData),
 		case (StateData#state.config)#config.persistent of
 		    false ->
-			ejabberd_hooks:run(room_destroyed, LServer, [LServer, Room, Host]);
+			ejabberd_hooks:run(room_destroyed, LServer, [LServer, Room, Host]),
+			RoomID = StateData#state.room_id,
+			ejabberd_hooks:run(vm_room_destroyed, LServer, [LServer, Room, Host, RoomID]);
 		    _ ->
 			ok
 		end
@@ -974,9 +977,7 @@ process_groupchat_message(#message{from = From, lang = Lang} = Packet, StateData
 			   of
 			 drop ->
 			     {next_state, normal_state, StateData};
-			 NewPacket1 ->
-			     NewPacket = xmpp:put_meta(xmpp:remove_subtag(NewPacket1, #nick{}),
-				 muc_sender_real_jid, From),
+			 NewPacket ->
 			     Node = if Subject == [] -> ?NS_MUCSUB_NODES_MESSAGES;
 				       true -> ?NS_MUCSUB_NODES_SUBJECT
 				    end,
@@ -2133,12 +2134,13 @@ add_new_user(From, Nick, Packet, StateData) ->
 		Nodes = get_subscription_nodes(Packet),
 		NewStateData =
 		      if not IsSubscribeRequest ->
-			      NewState = add_user_presence(
-					   From, Packet,
-					   add_online_user(From, Nick, Role,
-							   StateData)),
+				  NewState = add_user_presence( From, Packet,
+					   add_online_user(From, Nick, Role, StateData)),
 			      send_initial_presences_and_messages(
-				From, Nick, Packet, NewState, StateData),
+                       From, Nick, Packet, NewState, StateData),
+				  ServerHost = StateData#state.server_host,
+				  RoomID = StateData#state.room_id,
+                  ejabberd_hooks:run(vm_join_room, ServerHost, [ServerHost, Packet, From, RoomID, Nick]),
 			      NewState;
 			 true ->
 			      set_subscriber(From, Nick, Nodes, StateData)
@@ -2431,8 +2433,14 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
     {Role1, Presence1} =
         case (presence_broadcast_allowed(NJID, StateData) orelse
          presence_broadcast_allowed(NJID, OldStateData)) of
-            true -> {Role0, Presence0};
-            false -> {none, #presence{type = unavailable}}
+            true ->
+				ServerHost = StateData#state.server_host,
+				ejabberd_hooks:run(vm_broadcast_presence, ServerHost,
+									[ServerHost, Presence0, jid:make(LNJID)]),
+				{Role0, Presence0};
+
+            false ->
+				{none, #presence{type = unavailable}}
         end,
     Affiliation = get_affiliation(LJID, StateData),
     UserMap =
@@ -3544,6 +3552,7 @@ get_config(Lang, StateData, From) ->
 	  Config#config.allow_private_messages_from_visitors},
 	 {allow_query_users, Config#config.allow_query_users},
 	 {allowinvites, Config#config.allow_user_invites},
+	 {meetingId, Config#config.meeting_id},
 	 {allow_visitor_status, Config#config.allow_visitor_status},
 	 {allow_visitor_nickchange, Config#config.allow_visitor_nickchange},
 	 {allow_voice_requests, Config#config.allow_voice_requests},
@@ -3624,6 +3633,7 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({membersonly, V}, C) -> C#config{members_only = V};
 	 ({captcha_protected, V}, C) -> C#config{captcha_protected = V};
 	 ({allowinvites, V}, C) -> C#config{allow_user_invites = V};
+	 ({meetingId, V}, C) -> C#config{meeting_id = V};
 	 ({allow_subscription, V}, C) -> C#config{allow_subscription = V};
 	 ({passwordprotectedroom, V}, C) -> C#config{password_protected = V};
 	 ({roomsecret, V}, C) -> C#config{password = V};
@@ -3899,6 +3909,7 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 			 end,
 		  StateData#state{subject = Subj};
 	    subject_author -> StateData#state{subject_author = Val};
+	    room_id -> StateData#state{room_id = Val};
 	    _ -> StateData
 	  end,
     set_opts(Opts, NSD).
@@ -3962,6 +3973,7 @@ make_opts(StateData) ->
       maps:to_list(StateData#state.affiliations)},
      {subject, StateData#state.subject},
      {subject_author, StateData#state.subject_author},
+     {room_id, StateData#state.room_id},
      {hibernation_time, erlang:system_time(microsecond)},
      {subscribers, Subscribers}].
 
@@ -4123,7 +4135,8 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {changesubject, Config#config.allow_change_subj},
 	   {allowinvites, Config#config.allow_user_invites},
 	   {allowpm, AllowPM},
-	   {lang, Config#config.lang}],
+	   {lang, Config#config.lang},
+	   {meetingId, Config#config.meeting_id}],
     Fs2 = case Config#config.pubsub of
 	      Node when is_binary(Node), Node /= <<"">> ->
 		  [{pubsub, Node}|Fs1];

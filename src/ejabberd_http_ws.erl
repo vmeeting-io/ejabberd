@@ -32,7 +32,7 @@
 	 terminate/3, send_xml/2, setopts/2, sockname/1,
 	 peername/1, controlling_process/2, get_owner/1,
 	 reset_stream/1, close/1, change_shaper/2,
-	 socket_handoff/3, get_transport/1]).
+	 socket_handoff/3, get_transport/1, get_ws/1]).
 
 -include("logger.hrl").
 
@@ -222,7 +222,13 @@ handle_sync_event(close, _From, StateName, #state{ws = {_, WsPid}, rfc_compilant
     route_text(WsPid, fxml:element_to_binary(Close)),
     {stop, normal, StateData};
 handle_sync_event(close, _From, _StateName, StateData) ->
-    {stop, normal, StateData}.
+    {stop, normal, StateData};
+handle_sync_event(get_ws, _From, StateName, #state{ws = WS} = StateData) ->
+    {WS1, _} = WS,
+    {reply, WS1, StateName, StateData}.
+
+get_ws(PID) ->
+    p1_fsm:sync_send_all_state_event(PID, get_ws).
 
 handle_info(closed, _StateName, StateData) ->
     {stop, normal, StateData};
