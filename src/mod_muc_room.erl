@@ -3079,6 +3079,12 @@ can_change_ra(_FAffiliation, _FRole, owner, _TRole,
     %% A room owner tries to add as persistent owner a
     %% participant that is already owner because he is MUC admin
     true;
+can_change_ra(owner, moderator, _TAffiliation,
+	      _TRole, _RoleorAffiliation, _Value, _ServiceAf) ->
+    %% who is both owner and moderator can do anything,
+	%% e.g., in the case the owner join MUC room with multiple tab in vmeeting,
+	%% owner can kick themself in other tab
+    true;
 can_change_ra(_FAffiliation, _FRole, _TAffiliation,
 	      _TRole, _RoleorAffiliation, _Value, owner) ->
     %% Nobody can decrease MUC admin's role/affiliation
