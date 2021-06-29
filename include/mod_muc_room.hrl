@@ -66,7 +66,9 @@
     mam                                  = false :: boolean(),
     pubsub                               = <<"">> :: binary(),
     lang                                 = ejabberd_option:language() :: binary(),
-    meeting_id                           = <<"">> :: binary()
+    meeting_id                           = <<"">> :: binary(),
+    user_device_access_disabled          = false :: boolean(),
+    time_remained                        = -1 :: integer()
 }).
 
 -type config() :: #config{}.
