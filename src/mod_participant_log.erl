@@ -6,10 +6,7 @@
 -include("logger.hrl").
 -include("translate.hrl").
 -include("mod_muc_room.hrl").
-
-% TODO: get the whitelist value from config file
--define (WHITE_LIST_USERS, [<<"focus">>, <<"jvb">>, <<"jibri">>,
-                    <<"jvbbrewery">>, <<"jibribrewery">>]).
+-include("vmeeting_common.hrl").
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, on_join_room/5,
@@ -101,8 +98,9 @@ on_leave_room(_ServerHost, _Room, _Host, JID) ->
     [{LJID, VMUser}] ->
         VMUserID = maps:get(id, VMUser),
         Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+        httpc:request(delete, {Url, [], [], []}, [], []),
 
-        httpc:request(delete, {Url, [], [], []}, [], []);
+        ets:delete(vm_users, LJID);
     _ -> ok
     end.
 

@@ -70,6 +70,7 @@
 -include("translate.hrl").
 -include("mod_muc_room.hrl").
 -include("ejabberd_stacktrace.hrl").
+-include("vmeeting_common.hrl").
 
 -define(MAX_USERS_DEFAULT_LIST,
 	[5, 10, 20, 30, 50, 100, 200, 500, 1000, 2000, 5000]).
@@ -434,7 +435,12 @@ normal_state({route, <<"">>,
 			   #muc_owner{} ->
 			       process_iq_owner(From, IQ, StateData);
 			   #disco_info{} ->
-			       process_iq_disco_info(From, IQ, StateData);
+				   StateData1 = ejabberd_hooks:run_fold(
+	       				vm_pre_disco_info,
+	       				StateData#state.server_host,
+						StateData, []
+					),
+			       process_iq_disco_info(From, IQ, StateData1);
 			   #disco_items{} ->
 			       process_iq_disco_items(From, IQ, StateData);
 			   #vcard_temp{} ->
@@ -2033,6 +2039,14 @@ nick_collision(User, Nick, StateData) ->
       jid:remove_resource(jid:tolower(UserOfNick))
 	/= jid:remove_resource(jid:tolower(User))).
 
+normal_users_acc({User, _, _} , _, AccIn) ->
+	case lists:member(User, ?WHITE_LIST_USERS) of
+	false ->
+		AccIn + 1;
+	true ->
+		AccIn
+	end.
+
 -spec add_new_user(jid(), binary(), presence(), state()) -> state();
 		  (jid(), binary(), iq(), state()) -> {error, stanza_error()} |
 						      {ignore, state()} |
@@ -2042,7 +2056,7 @@ add_new_user(From, Nick, Packet, StateData) ->
     MaxUsers = get_max_users(StateData),
     MaxAdminUsers = MaxUsers +
 		      get_max_users_admin_threshold(StateData),
-    NUsers = maps:size(StateData#state.users),
+    NUsers = maps:fold(fun normal_users_acc/3, 0, StateData#state.users),
     Affiliation = get_affiliation(From, StateData),
     ServiceAffiliation = get_service_affiliation(From,
 						 StateData),
@@ -2051,10 +2065,12 @@ add_new_user(From, Nick, Packet, StateData) ->
 	mod_muc_opt:max_user_conferences(StateData#state.server_host),
     Collision = nick_collision(From, Nick, StateData),
     IsSubscribeRequest = not is_record(Packet, presence),
+	IsWhilelistUser = lists:member(From#jid.luser, ?WHITE_LIST_USERS) == true,
     case {(ServiceAffiliation == owner orelse
 	     ((Affiliation == admin orelse Affiliation == owner)
 	       andalso NUsers < MaxAdminUsers)
-	       orelse NUsers < MaxUsers)
+	       orelse NUsers < MaxUsers
+		   orelse IsWhilelistUser)
 	    andalso NConferences < MaxConferences,
 	  Collision,
 	  mod_muc:can_use_nick(StateData#state.server_host,
@@ -2063,7 +2079,9 @@ add_new_user(From, Nick, Packet, StateData) ->
 	of
       {false, _, _, _} when NUsers >= MaxUsers orelse NUsers >= MaxAdminUsers ->
 	  Txt = ?T("Too many users in this conference"),
-	  Err = xmpp:err_resource_constraint(Txt, Lang),
+	  % FIXME: use err_service_unavailable() instead of err_resource_constraint()
+	  % so that VMeeting display correct error message, but is this the correct fix?
+	  Err = xmpp:err_service_unavailable(Txt, Lang),
 	  if not IsSubscribeRequest ->
 		  ejabberd_router:route_error(Packet, Err),
 		  StateData;
@@ -3559,6 +3577,9 @@ get_config(Lang, StateData, From) ->
 	 {allow_query_users, Config#config.allow_query_users},
 	 {allowinvites, Config#config.allow_user_invites},
 	 {meetingId, Config#config.meeting_id},
+	 {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
+	 {timeremained, Config#config.time_remained},
+	 {created_timestamp, Config#config.created_timestamp},
 	 {allow_visitor_status, Config#config.allow_visitor_status},
 	 {allow_visitor_nickchange, Config#config.allow_visitor_nickchange},
 	 {allow_voice_requests, Config#config.allow_voice_requests},
@@ -3640,6 +3661,9 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({captcha_protected, V}, C) -> C#config{captcha_protected = V};
 	 ({allowinvites, V}, C) -> C#config{allow_user_invites = V};
 	 ({meetingId, V}, C) -> C#config{meeting_id = V};
+	 ({userDeviceAccessDisabled, V}, C) -> C#config{user_device_access_disabled = V};
+	 ({timeremained, V}, C) -> C#config{time_remained = V};
+	 ({created_timestamp, V}, C) -> C#config{created_timestamp = V};
 	 ({allow_subscription, V}, C) -> C#config{allow_subscription = V};
 	 ({passwordprotectedroom, V}, C) -> C#config{password_protected = V};
 	 ({roomsecret, V}, C) -> C#config{password = V};
@@ -4142,7 +4166,10 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {allowinvites, Config#config.allow_user_invites},
 	   {allowpm, AllowPM},
 	   {lang, Config#config.lang},
-	   {meetingId, Config#config.meeting_id}],
+	   {meetingId, Config#config.meeting_id},
+	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
+	   {timeremained, Config#config.time_remained},
+	   {created_timestamp, Config#config.created_timestamp}],
     Fs2 = case Config#config.pubsub of
 	      Node when is_binary(Node), Node /= <<"">> ->
 		  [{pubsub, Node}|Fs1];

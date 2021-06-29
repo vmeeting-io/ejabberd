@@ -35,9 +35,9 @@
 	 create_rooms_file/1, destroy_rooms_file/1,
 	 rooms_unused_list/2, rooms_unused_destroy/2,
 	 rooms_empty_list/1, rooms_empty_destroy/1,
-	 get_user_rooms/2, get_room_occupants/2,
+	 get_user_rooms/2, get_room_occupants/2, get_room_pid/2,
 	 get_room_occupants_number/2, send_direct_invitation/5,
-	 change_room_option/4, get_room_options/2,
+	 change_room_option/4, change_room_option/3, get_room_options/2,get_room_options/1,
 	 set_room_affiliation/4, get_room_affiliations/2, get_room_affiliation/3,
 	 web_menu_main/2, web_page_main/2, web_menu_host/3,
 	 subscribe_room/4, unsubscribe_room/2, get_subscribers/2,
@@ -1164,7 +1164,10 @@ change_option(Option, Value, Config) ->
 	public_list -> Config#config{public_list = Value};
 	title -> Config#config{title = Value};
 	vcard -> Config#config{vcard = Value};
-	voice_request_min_interval -> Config#config{voice_request_min_interval = Value}
+	voice_request_min_interval -> Config#config{voice_request_min_interval = Value};
+	user_device_access_disabled -> Config#config{user_device_access_disabled = Value};
+	time_remained -> Config#config{time_remained = Value};
+    created_timestamp -> Config#config{created_timestamp = Value}
     end.
 
 %%----------------------------
