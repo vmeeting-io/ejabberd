@@ -54,6 +54,7 @@
 	 is_subscribed/2,
 	 get_subscribers/1,
 	 service_message/2,
+	 service_notice/2,
 	 get_disco_item/4]).
 
 %% gen_fsm callbacks
@@ -259,6 +260,18 @@ get_disco_item(Pid, Filter, JID, Lang) ->
 	  _:{_, {p1_fsm, _, _}} ->
 	    {error, notfound}
     end.
+
+-spec service_notice(pid(), binary()) -> ok.
+service_notice(Pid, Text) ->
+	SubEl = #xmlel{name = <<"notice">>, children = [{xmlcdata, Text}]},
+    MessagePkt = #message{type = groupchat, sub_els = [SubEl]},
+	{ok, StateData} = get_state(Pid),
+    send_wrapped_multiple(
+      StateData#state.jid,
+      get_users_and_subscribers(StateData),
+      MessagePkt,
+      ?NS_MUCSUB_NODES_MESSAGES,
+      StateData).
 
 %%%----------------------------------------------------------------------
 %%% Callback functions from gen_fsm

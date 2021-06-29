@@ -111,10 +111,11 @@ process(LocalPath, Request) ->
     end.
 
 process_notice(Data) ->
-    %% TODO: this is just placeholder, current notice function works without
-    %% the need of ejabberd.
-    ?INFO_MSG("mod_site_license notice", []),
-    ok.
+    DataJSON = jiffy:decode(Data, [return_maps]),
+    {Room, Host} = split_room_and_host(maps:get(<<"room_name">>, DataJSON)),
+    RoomPID = mod_muc_admin:get_room_pid(Room, Host),
+    mod_muc_room:service_notice(RoomPID, maps:get(<<"notice">>, DataJSON)),
+    {200, [], []}.
 
 process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
@@ -136,7 +137,7 @@ process_event(Data) ->
         {ok, MaxDuration} ->
             {ok, RoomConfig} = mod_muc_room:get_config(RoomPID),
             if RoomConfig#config.time_remained < 0 andalso MaxDuration > 0 ->
-                destroy_room_after_secs(RoomPID, <<"duration_expired">>, MaxDuration+100),
+                destroy_room_after_secs(RoomPID, <<"duration_expired">>, MaxDuration),
                 mod_muc_admin:change_room_option(RoomPID, time_remained, MaxDuration),
 
                 [{_, RoomData}] = ets:lookup(vm_room_data, {Room, Host}),
