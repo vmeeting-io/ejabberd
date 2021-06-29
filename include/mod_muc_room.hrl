@@ -67,6 +67,7 @@
     pubsub                               = <<"">> :: binary(),
     lang                                 = ejabberd_option:language() :: binary(),
     meeting_id                           = <<"">> :: binary(),
+    created_timestamp                    = undefined :: non_neg_integer(),
     user_device_access_disabled          = false :: boolean(),
     time_remained                        = -1 :: integer()
 }).
