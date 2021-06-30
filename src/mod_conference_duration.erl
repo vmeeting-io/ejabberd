@@ -13,16 +13,19 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, on_join_room/5,
-    mod_doc/0]).
+    on_start_room/4, mod_doc/0]).
 
 start(Host, _Opts) ->
+    ?INFO_MSG("mod_conference_duration started ~n", []),
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100).
 
 stop(Host) ->
+    ?INFO_MSG("mod_conference_duration stoped ~n", []),
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100).
 
 on_start_room(State, _ServerHost, Room, Host) ->
+    ?INFO_MSG("room started ~p", [Room]),
     Config = State#state.config#config{created_timestamp = trunc(os:system_time() / 1000)},
     State1 = State#state{config = Config},
     State1.
