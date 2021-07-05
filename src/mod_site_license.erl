@@ -12,12 +12,6 @@
 -include("mod_muc_room.hrl").
 -include("ejabberd_http.hrl").
 
--record(room_data,
-{
-    start_time = -1 :: integer(),
-    max_durations = -1 :: integer()
-}).
-
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, process/2,
         on_start_room/3, on_room_destroyed/3, on_vm_pre_disco_info/1, mod_doc/0]).
@@ -71,12 +65,18 @@ xmpp_domain(Host) ->
 
 
 on_start_room(_ServerHost, Room, Host) ->
-    RoomData = #room_data{start_time = erlang:system_time(second)},
+    StartTime = erlang:system_time(second),
+    CreatedTimeStamp = erlang:system_time(millisecond),
+    RoomData = #room_data{start_time = StartTime, created_timestamp = CreatedTimeStamp},
+    ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, RoomData]),
     ets:insert(vm_room_data, {{Room, Host}, RoomData}),
     ok.
 
 on_room_destroyed(_ServerHost, Room, Host) ->
-    ets:delete(vm_room_data, {Room, Host}),
+    try ets:delete(vm_room_data, [Room, Host])
+    catch
+        _:badarg -> ok
+    end,
     ok.
 
 on_vm_pre_disco_info(#state{room = Room, host = Host} = StateData) ->

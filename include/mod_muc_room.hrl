@@ -67,7 +67,6 @@
     pubsub                               = <<"">> :: binary(),
     lang                                 = ejabberd_option:language() :: binary(),
     meeting_id                           = <<"">> :: binary(),
-    created_timestamp                    = 0 :: non_neg_integer(),
     user_device_access_disabled          = false :: boolean(),
     time_remained                        = -1 :: integer()
 }).
@@ -133,3 +132,10 @@
 -type affiliations() :: #{ljid() => affiliation() | {affiliation(), binary()}}.
 -type subscribers() :: #{ljid() => #subscriber{}}.
 -type subscriber_nicks() :: #{binary() => [ljid()]}.
+
+-record(room_data,
+{
+    start_time = -1 :: integer(),
+    max_durations = -1 :: integer(),
+    created_timestamp = 0 :: non_neg_integer()
+}).

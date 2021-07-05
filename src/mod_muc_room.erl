@@ -3592,7 +3592,6 @@ get_config(Lang, StateData, From) ->
 	 {meetingId, Config#config.meeting_id},
 	 {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
 	 {timeremained, Config#config.time_remained},
-	 {created_timestamp, Config#config.created_timestamp},
 	 {allow_visitor_status, Config#config.allow_visitor_status},
 	 {allow_visitor_nickchange, Config#config.allow_visitor_nickchange},
 	 {allow_voice_requests, Config#config.allow_voice_requests},
@@ -3676,7 +3675,6 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({meetingId, V}, C) -> C#config{meeting_id = V};
 	 ({userDeviceAccessDisabled, V}, C) -> C#config{user_device_access_disabled = V};
 	 ({timeremained, V}, C) -> C#config{time_remained = V};
-	 ({created_timestamp, V}, C) -> C#config{created_timestamp = V};
 	 ({allow_subscription, V}, C) -> C#config{allow_subscription = V};
 	 ({passwordprotectedroom, V}, C) -> C#config{password_protected = V};
 	 ({roomsecret, V}, C) -> C#config{password = V};
@@ -4181,8 +4179,7 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
 	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
-	   {timeremained, Config#config.time_remained},
-	   {created_timestamp, Config#config.created_timestamp}],
+	   {timeremained, Config#config.time_remained}],
     Fs2 = case Config#config.pubsub of
 	      Node when is_binary(Node), Node /= <<"">> ->
 		  [{pubsub, Node}|Fs1];

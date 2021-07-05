@@ -87,8 +87,8 @@ defmodule Ejabberd.Mixfile do
   defp deps do
     [{:lager, "~> 3.6.0"},
      {:p1_utils, "~> 1.0"},
-     {:fast_xml, "~> 1.1"},
-     {:xmpp, "~> 1.5.1"},
+     {:fast_xml, "~> 1.1", override: true},
+     {:xmpp, git: "https://github.com/vmeeting-io/xmpp.git", ref: "7123bbe56f84cf6b88d3a3cbf78edd01d1d7cc83"},
      {:cache_tab, "~> 1.0"},
      {:stringprep, "~> 1.0"},
      {:fast_yaml, "~> 1.0"},
