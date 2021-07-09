@@ -9,7 +9,8 @@
     room_jid_match_rewrite/1,
     room_jid_match_rewrite/2,
     internal_room_jid_match_rewrite/2,
-    filter_packet/1
+    filter_packet/1,
+    extract_subdomain/1
 ]).
 
 -include_lib("xmpp/include/xmpp.hrl").

@@ -42,13 +42,13 @@ on_join_room(_ServerHost, Room, Host, JID) ->
     %   </json-message>
     % </message>
 
-    ?INFO_MSG("conference_duration:on_join_room ~ts ~ts ~ts", [Room, Host, jid:encode(JID)]),
+    ?INFO_MSG("conference_duration:on_join_room ~p ~ts", [{Room, Host}, jid:encode(JID)]),
 
     case lists:member(User, ?WHITE_LIST_USERS) of
     true -> ok;
     false ->
-        case ets:lookup(vm_room_data, {Room, Host}) of
-        [{{Room, Host}, #room_data{created_timestamp = CreatedTimeStamp}}] ->
+        case ets:lookup(vm_room_data, Room) of
+        [{Room, #room_data{created_timestamp = CreatedTimeStamp}}] ->
             ?INFO_MSG("send message to=~ts, created_timestamp=~b", [jid:encode(JID), CreatedTimeStamp]),
             JsonMessage = #{type => conference_duration,
                 created_timestamp => CreatedTimeStamp},

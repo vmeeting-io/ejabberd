@@ -59,7 +59,7 @@ on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
         StatsID = fxml:get_tag_cdata(ElStatsID),
 
         Body = #{
-                conference => RoomID,
+                conference => State#state.room_id,
                 joinTime => JoinTime,
                 leaveTime => nil,
                 name => Name,
@@ -142,14 +142,14 @@ on_broadcast_presence(_ServerHost,
 
 on_start_room(State, _ServerHost, Room, Host) ->
     MeetingID = State#state.config#config.meeting_id,
-    [_ , SiteID | _] = string:split(Host, ".", all),
+    {SiteID, Name} = vm_util:extract_subdomain(Room),
 
     Url = "http://vmapi:5000/sites/"
             ++ binary:bin_to_list(SiteID)
             ++ "/conferences",
     ContentType = "application/x-www-form-urlencoded",
     ReqBody = uri_string:compose_query(
-                [{"name", Room}, {"meeting_id", MeetingID}]),
+                [{"name", Name}, {"meeting_id", MeetingID}]),
 
     case httpc:request(patch, {Url, [], ContentType, ReqBody}, [], []) of
     {ok, {{_, 201, _} , _Header, Rep}} ->

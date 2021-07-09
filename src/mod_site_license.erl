@@ -69,19 +69,19 @@ on_start_room(_ServerHost, Room, Host) ->
     CreatedTimeStamp = erlang:system_time(millisecond),
     RoomData = #room_data{start_time = StartTime, created_timestamp = CreatedTimeStamp},
     ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, RoomData]),
-    ets:insert(vm_room_data, {{Room, Host}, RoomData}),
+    ets:insert(vm_room_data, {Room, RoomData}),
     ok.
 
 on_room_destroyed(_ServerHost, Room, Host) ->
-    try ets:delete(vm_room_data, [Room, Host])
+    try ets:delete(vm_room_data, Room)
     catch
         _:badarg -> ok
     end,
     ok.
 
 on_vm_pre_disco_info(#state{room = Room, host = Host} = StateData) ->
-    case ets:lookup(vm_room_data, {Room, Host}) of
-    [{{Room, Host}, #room_data{start_time = StartTime, max_durations = MaxDurations}}] ->
+    case ets:lookup(vm_room_data, Room) of
+    [{Room, #room_data{start_time = StartTime, max_durations = MaxDurations}}] ->
         TimeElapsed = erlang:system_time(second) - StartTime,
         TimeRemained = MaxDurations - TimeElapsed,
         Config = StateData#state.config#config{time_remained = TimeRemained},
@@ -112,15 +112,18 @@ process(LocalPath, Request) ->
 
 process_notice(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
-    {Room, Host} = split_room_and_host(maps:get(<<"room_name">>, DataJSON)),
-    RoomPID = mod_muc_admin:get_room_pid(Room, Host),
+    Room = maps:get(<<"room_name">>, DataJSON),
+    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
+    RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
     mod_muc_room:service_notice(RoomPID, maps:get(<<"notice">>, DataJSON)),
     {200, [], []}.
 
 process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
-    {Room, Host} = split_room_and_host(maps:get(<<"room_name">>, DataJSON)),
-    RoomPID = mod_muc_admin:get_room_pid(Room, Host),
+    Room = maps:get(<<"room_name">>, DataJSON),
+    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
+    % ?INFO_MSG("process_event: ~ts ~ts", [Room, MucDomain]),
+    RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} ->
@@ -140,9 +143,9 @@ process_event(Data) ->
                     destroy_room_after_secs(RoomPID, <<"duration_expired">>, MaxDuration),
                     mod_muc_admin:change_room_option(RoomPID, time_remained, MaxDuration),
 
-                    [{_, RoomData}] = ets:lookup(vm_room_data, {Room, Host}),
+                    [{_, RoomData}] = ets:lookup(vm_room_data, Room),
                     RoomData1 = RoomData#room_data{max_durations = MaxDuration},
-                    ets:insert(vm_room_data, {{Room, Host}, RoomData1});
+                    ets:insert(vm_room_data, {Room, RoomData1});
 
                 _ ->
                     ok
@@ -174,9 +177,8 @@ split_room_and_host(Room) ->
     {match, [SiteID, RoomName]} = re:run(Room,
                                         "\\[(?<site>\\w+)\\](?<room>.+)",
                                         [{capture, [site, room], binary}]),
-    Host = binary:list_to_bin("muc." ++ binary:bin_to_list(SiteID) ++ "." ++
-            xmpp_domain(global)),
-    {RoomName, Host}.
+    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
+    {RoomName, MucDomain}.
 
 verify_auth_token(Auth) ->
     case Auth of
