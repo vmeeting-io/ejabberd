@@ -50,8 +50,8 @@ on_join_room(_ServerHost, Room, Host, JID) ->
         case ets:lookup(vm_room_data, {Room, Host}) of
         [{{Room, Host}, #room_data{created_timestamp = CreatedTimeStamp}}] ->
             ?INFO_MSG("send message to=~ts, created_timestamp=~b", [jid:encode(JID), CreatedTimeStamp]),
-            JsonMessage = #{<<"type">> => <<"conference_duration">>,
-                <<"created_timestamp">> => CreatedTimeStamp},
+            JsonMessage = #{type => conference_duration,
+                created_timestamp => CreatedTimeStamp},
             Msg = #message{
                 from = jid:make(<<"conferenceduration.", _ServerHost/binary>>),
                 to = JID,

@@ -47,6 +47,7 @@
 	 get_config/1,
 	 set_config/2,
 	 get_state/1,
+	 set_state/2,
 	 change_item/5,
 	 config_reloaded/1,
 	 subscribe/4,
@@ -199,6 +200,15 @@ change_item(Pid, JID, Type, AffiliationOrRole, Reason) ->
 -spec get_state(pid()) -> {ok, state()} | {error, notfound | timeout}.
 get_state(Pid) ->
     try p1_fsm:sync_send_all_state_event(Pid, get_state)
+    catch _:{timeout, {p1_fsm, _, _}} ->
+	    {error, timeout};
+	  _:{_, {p1_fsm, _, _}} ->
+	    {error, notfound}
+    end.
+
+-spec set_state(pid(), state()) -> {ok, state()} | {error, notfound | timeout}.
+set_state(Pid, State) ->
+    try p1_fsm:sync_send_all_state_event(Pid, {change_state, State})
     catch _:{timeout, {p1_fsm, _, _}} ->
 	    {error, timeout};
 	  _:{_, {p1_fsm, _, _}} ->
@@ -1934,7 +1944,12 @@ remove_online_user(JID, StateData, Reason) ->
 	    catch _:{badkey, _} ->
 		    StateData#state.nicks
 	    end,
-    reset_hibernate_timer(StateData#state{users = Users, nicks = Nicks}).
+    NewStateData = reset_hibernate_timer(StateData#state{users = Users, nicks = Nicks}),
+	% State, _ServerHost, _Room, _Host, JID
+	ServerHost = NewStateData#state.server_host,
+	Host = NewStateData#state.host,
+	Room = NewStateData#state.room,
+	ejabberd_hooks:run_fold(vm_leave_room, ServerHost, NewStateData, [ServerHost, Room, Host, JID]).
 
 -spec filter_presence(presence()) -> presence().
 filter_presence(Presence) ->
@@ -2171,8 +2186,7 @@ add_new_user(From, Nick, Packet, StateData) ->
                        From, Nick, Packet, NewState, StateData),
 				  ServerHost = StateData#state.server_host,
 				  RoomID = StateData#state.room_id,
-                  ejabberd_hooks:run(vm_join_room, ServerHost, [ServerHost, Packet, From, RoomID, Nick]),
-			      NewState;
+                  ejabberd_hooks:run_fold(vm_join_room, ServerHost, NewState, [ServerHost, Packet, From, RoomID, Nick]);
 			 true ->
 			      set_subscriber(From, Nick, Nodes, StateData)
 		      end,
@@ -3725,11 +3739,11 @@ change_config(Config, StateData) ->
                 store_room(StateData1),
                 StateData1;
             {true, false} ->
-		Affiliations = get_affiliations(StateData),
-		maybe_forget_room(StateData),
-		StateData1#state{affiliations = Affiliations};
-	    _ ->
-		StateData1
+				Affiliations = get_affiliations(StateData),
+				maybe_forget_room(StateData),
+				StateData1#state{affiliations = Affiliations};
+			_ ->
+				StateData1
         end,
     case {(StateData#state.config)#config.members_only,
 	  Config#config.members_only} of

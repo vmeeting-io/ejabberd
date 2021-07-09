@@ -134,18 +134,18 @@ process_event(Data) ->
         end,
 
         case maps:find(<<"max_durations">>, DataJSON) of
-        {ok, MaxDuration} ->
-            {ok, RoomConfig} = mod_muc_room:get_config(RoomPID),
-            if RoomConfig#config.time_remained < 0 andalso MaxDuration > 0 ->
-                destroy_room_after_secs(RoomPID, <<"duration_expired">>, MaxDuration),
-                mod_muc_admin:change_room_option(RoomPID, time_remained, MaxDuration),
+        {ok, MaxDuration} when MaxDuration > 0 ->
+            case mod_muc_room:get_config(RoomPID) of
+                {ok, RoomConfig} when RoomConfig#config.time_remained < 0 ->
+                    destroy_room_after_secs(RoomPID, <<"duration_expired">>, MaxDuration),
+                    mod_muc_admin:change_room_option(RoomPID, time_remained, MaxDuration),
 
-                [{_, RoomData}] = ets:lookup(vm_room_data, {Room, Host}),
-                RoomData1 = RoomData#room_data{max_durations = MaxDuration},
-                ets:insert(vm_room_data, {{Room, Host}, RoomData1});
+                    [{_, RoomData}] = ets:lookup(vm_room_data, {Room, Host}),
+                    RoomData1 = RoomData#room_data{max_durations = MaxDuration},
+                    ets:insert(vm_room_data, {{Room, Host}, RoomData1});
 
-            true ->
-                ok
+                _ ->
+                    ok
             end;
         _ ->
             ok

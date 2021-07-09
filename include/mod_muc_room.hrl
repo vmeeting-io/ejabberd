@@ -123,7 +123,9 @@
     room_shaper             = none :: ejabberd_shaper:shaper(),
     room_queue              :: p1_queue:queue({message | presence, jid()}) | undefined,
     hibernate_timer         = none :: reference() | none | hibernating,
-    room_id                 = <<"">> :: binary()
+    room_id                 = <<"">> :: binary(),
+    speakerstats            = #{} :: #{binary() => #{}},
+    dominantSpeakerId       = <<"">> :: binary()
 }).
 
 -type users() :: #{ljid() => #user{}}.
