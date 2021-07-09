@@ -18,10 +18,12 @@
 
 start(Host, _Opts) ->
     % should start before other mod so that meeting id is available
+    ?INFO_MSG("mod_muc_meeting_id started ~ts ~n", [Host]),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ok.
 
 stop(Host) ->
+    ?INFO_MSG("mod_muc_meeting_id stopped ~ts ~n", [Host]),
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ok.
 

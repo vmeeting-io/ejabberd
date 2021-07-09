@@ -55,7 +55,8 @@ on_join_room(_ServerHost, Room, Host, JID) ->
             Msg = #message{
                 from = jid:make(<<"conferenceduration.", _ServerHost/binary>>),
                 to = JID,
-                json_message = xmpp:mk_text(jiffy:encode(JsonMessage))},
+                sub_els = [#json_message{data = jiffy:encode(JsonMessage)}]
+            },
             ejabberd_router:route(Msg);
         _ ->
             ?INFO_MSG("look up not found ~ts", []),

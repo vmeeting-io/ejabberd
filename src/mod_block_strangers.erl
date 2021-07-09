@@ -71,7 +71,7 @@ filter_packet({#message{from = From} = Msg, State} = Acc) ->
     LBFrom = jid:remove_resource(LFrom),
     #{pres_a := PresA} = State,
     case (?SETS):is_element(LFrom, PresA)
-	orelse (?SETS):is_element(LBFrom, PresA)
+	    orelse (?SETS):is_element(LBFrom, PresA)
         orelse sets_bare_member(LBFrom, PresA) of
 	false ->
 	    case check_message(Msg) of

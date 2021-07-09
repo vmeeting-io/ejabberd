@@ -34,11 +34,11 @@ stop(Host) ->
     ?INFO_MSG("speakerstats stoped ~n", []).
 
 -spec process_message(stanza()) -> stop | ok.
-process_message(#message{from = From, to = #jid{luser = <<"">>, lresource = <<"">>}, type = normal, speakerstats = SpeakerStats})
+process_message(#message{from = From, to = #jid{luser = <<"">>, lresource = <<"">>}, type = normal, sub_els = [#xmlel{name = <<"speakerstats">>} = SpeakerStats]})
     when SpeakerStats /= undefined ->
-        ?INFO_MSG("speakerstats: process_message ~ts ~p", [jid:to_string(From), SpeakerStats]),
+        % ?INFO_MSG("speakerstats: process_message ~ts ~p", [jid:to_string(From), SpeakerStats]),
 
-        {speakerstats, RoomAddress} = SpeakerStats,
+        #speakerstats{room = RoomAddress} = xmpp:decode(SpeakerStats),
         [Room, Host] = string:split(RoomAddress, "@"),
         case vm_util:is_healthcheck_room(RoomAddress) of 
         true ->
@@ -46,7 +46,6 @@ process_message(#message{from = From, to = #jid{luser = <<"">>, lresource = <<""
         % false -> case vm_util:get_state_from_jid(vm_util:room_jid_match_rewrite(RoomAddress)) of
         false -> case vm_util:get_state_from_jid(jid:make(Room, Host)) of
             error -> 
-
                 stop;
             {ok, State} -> 
                 Nick = vm_util:find_nick_by_jid(From, State),
@@ -145,7 +144,7 @@ on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
             Msg = #message{
                 from = jid:make(<<"speakerstats.", _ServerHost/binary>>),
                 to = JID,
-                json_message = xmpp:mk_text(jiffy:encode(JsonMessage))},
+                sub_els = [#json_message{data = jiffy:encode(JsonMessage)}]},
             ejabberd_router:route(Msg);
         false -> ok
         end,
