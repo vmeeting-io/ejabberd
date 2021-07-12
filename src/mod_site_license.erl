@@ -122,7 +122,7 @@ process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
     Room = maps:get(<<"room_name">>, DataJSON),
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
-    % ?INFO_MSG("process_event: ~ts ~ts", [Room, MucDomain]),
+    ?INFO_MSG("process_event: ~ts ~ts", [Room, MucDomain]),
     RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
 
     case maps:find(<<"delete_yn">>, DataJSON) of
@@ -164,13 +164,17 @@ process_event(Data) ->
 
     {200, [], []}.
 
+destroy_room(RoomPID, Message)
+    when RoomPID == room_not_found orelse RoomPID == invalid_service ->
+    ?INFO_MSG("destroy_room ERROR: ~p", [RoomPID]),
+    ok;
 destroy_room(RoomPID, Message) ->
-        Mes = binary:list_to_bin(io_lib:format(Message, [])),
-        mod_muc_room:destroy(RoomPID, Mes).
+    Mes = binary:list_to_bin(io_lib:format(Message, [])),
+    mod_muc_room:destroy(RoomPID, Mes).
 
 destroy_room_after_secs(RoomPID, Message, After) ->
-        Mes = binary:list_to_bin(io_lib:format(Message, [])),
-        timer:apply_after(After * 1000, mod_muc_room, destroy, [RoomPID, Mes]).
+    Mes = binary:list_to_bin(io_lib:format(Message, [])),
+    timer:apply_after(After * 1000, mod_muc_room, destroy, [RoomPID, Mes]).
 
 
 split_room_and_host(Room) ->
