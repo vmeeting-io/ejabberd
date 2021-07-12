@@ -382,8 +382,7 @@ code_change(_OldVsn, State, _Extra) ->
 -spec do_route(stanza()) -> ok.
 do_route(OrigPacket) ->
     ?DEBUG("Route:~n~ts", [xmpp:pp(OrigPacket)]),
-	FilteredPacket = vm_util:filter_packet(OrigPacket),
-    case ejabberd_hooks:run_fold(filter_packet, FilteredPacket, []) of
+    case ejabberd_hooks:run_fold(filter_packet, OrigPacket, []) of
 	drop ->
 	    ok;
 	Packet ->

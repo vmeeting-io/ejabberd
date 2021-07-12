@@ -9,7 +9,6 @@
     room_jid_match_rewrite/1,
     room_jid_match_rewrite/2,
     internal_room_jid_match_rewrite/2,
-    filter_packet/1,
     extract_subdomain/1
 ]).
 
@@ -101,9 +100,15 @@ room_jid_split_subdomain(RoomJid) ->
 % @param stanza the stanza
 % @return returns room jid [foo]room1@conference.example.com when it has subdomain
 % otherwise room1@conference.example.com(the room_jid value untouched)
+-spec room_jid_match_rewrite(undefined | jid()) -> undefined | jid().
+room_jid_match_rewrite(RoomJid) when RoomJid == undefined ->
+    undefined;
 room_jid_match_rewrite(RoomJid) ->
     room_jid_match_rewrite(RoomJid, undefined).
 
+-spec room_jid_match_rewrite(undefined | jid(), stanza()) -> undefined | jid().
+room_jid_match_rewrite(RoomJid, Stanza) when RoomJid == undefined ->
+    undefined;
 room_jid_match_rewrite(RoomJid, Stanza) ->
     {N, H, R, S} = room_jid_split_subdomain(RoomJid),
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
@@ -138,6 +143,9 @@ extract_subdomain(Room) ->
     end.
 
 % Utility function to check and convert a room JID from real [foo]room1@muc.example.com to virtual room1@muc.foo.example.com
+-spec internal_room_jid_match_rewrite(undefined | jid(), stanza()) -> undefined | jid().
+internal_room_jid_match_rewrite(RoomJid, Stanza) when RoomJid == undefined ->
+    undefined;
 internal_room_jid_match_rewrite(RoomJid, Stanza) ->
     {N, H, R} = jid:split(RoomJid),
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
@@ -161,33 +169,3 @@ internal_room_jid_match_rewrite(RoomJid, Stanza) ->
             RoomJid
         end
     end.
-
--spec filter_packet(stanza()) -> stanza().
-filter_packet(#iq{sub_els = [#iq_conference{room = Room}]} = Packet) ->
-    Packet1 = case string:split(Room, "@") of
-    [_] -> Packet;
-    [N, H] ->
-        NewRoom = jid:to_string(room_jid_match_rewrite(jid:make(N, H))),
-        xmpp:set_els(Packet, [#iq_conference{room = NewRoom}])
-    end,
-    Packet2 = filter_packet_from(Packet1, xmpp:get_from(Packet1)),
-    filter_packet_to(Packet1, xmpp:get_to(Packet2));
-filter_packet(Packet) ->
-    Packet1 = filter_packet_from(Packet, xmpp:get_from(Packet)),
-    filter_packet_to(Packet1, xmpp:get_to(Packet)).
-
--spec filter_packet_from(stanza(), jid()) -> stanza().
-filter_packet_from(Packet, undefined) ->
-    Packet;
-filter_packet_from(Packet, From) ->
-    From1 = internal_room_jid_match_rewrite(From, Packet),
-    ?DEBUG("filter_packet2: from(~ts -> ~ts)", [jid:to_string(From), jid:to_string(From1)]),
-    xmpp:set_from(Packet, From1).
-
--spec filter_packet_to(stanza(), jid()) -> stanza().
-filter_packet_to(Packet, undefined) ->
-    Packet;
-filter_packet_to(Packet, To) ->
-    To1 = room_jid_match_rewrite(To, Packet),
-    ?DEBUG("filter_packet2: to(~ts -> ~ts)", [jid:to_string(To), jid:to_string(To1)]),
-    xmpp:set_to(Packet, To1).
