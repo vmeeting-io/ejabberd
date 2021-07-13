@@ -939,9 +939,8 @@ terminate(Reason, _StateName,
 		add_to_log(room_existence, stopped, StateData),
 		case (StateData#state.config)#config.persistent of
 		    false ->
-			ejabberd_hooks:run(room_destroyed, LServer, [LServer, Room, Host]),
-			RoomID = StateData#state.room_id,
-			ejabberd_hooks:run(vm_room_destroyed, LServer, [LServer, Room, Host, RoomID]);
+			ejabberd_hooks:run_fold(vm_room_destroyed, LServer, StateData, [LServer, Room, Host]),
+			ok;
 		    _ ->
 			ok
 		end
@@ -3431,7 +3430,12 @@ process_iq_owner(From, #iq{type = set, lang = Lang,
 				is_allowed_string_limits(Options, StateData) andalso
 				is_password_settings_correct(Options, StateData) of
 				true ->
-				    set_config(Options, StateData, Lang);
+					try
+						StateData1 = ejabberd_hooks:run_fold(vm_change_state, StateData#state.server_host, StateData, [Options]),
+						set_config(Options, StateData1, Lang)
+					catch  _:{badmatch, {error, #stanza_error{}} = Err} ->
+						Err
+					end;
 				false ->
 				    {error, xmpp:err_not_acceptable()}
 			    end
@@ -3603,9 +3607,6 @@ get_config(Lang, StateData, From) ->
 	  Config#config.allow_private_messages_from_visitors},
 	 {allow_query_users, Config#config.allow_query_users},
 	 {allowinvites, Config#config.allow_user_invites},
-	 {meetingId, Config#config.meeting_id},
-	 {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
-	 {timeremained, Config#config.time_remained},
 	 {allow_visitor_status, Config#config.allow_visitor_status},
 	 {allow_visitor_nickchange, Config#config.allow_visitor_nickchange},
 	 {allow_voice_requests, Config#config.allow_voice_requests},
@@ -4193,32 +4194,38 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
 	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
-	   {timeremained, Config#config.time_remained}],
+	   {lobbyroom, StateData#state.lobbyroom}],
     Fs2 = case Config#config.pubsub of
-	      Node when is_binary(Node), Node /= <<"">> ->
-		  [{pubsub, Node}|Fs1];
-	      _ ->
-		  Fs1
-	  end,
+			Node when is_binary(Node), Node /= <<"">> ->
+				[{pubsub, Node}|Fs1];
+			_ ->
+				Fs1
+		end,
     Fs3 = case Static of
-	      false ->
-		  [{occupants, maps:size(StateData#state.nicks)}|Fs2];
-	      true ->
-		  Fs2
-	  end,
+			false ->
+				[{occupants, maps:size(StateData#state.nicks)}|Fs2];
+			true ->
+				Fs2
+		end,
     Fs4 = case Config#config.logging of
-	      true ->
-		  case mod_muc_log:get_url(StateData) of
-		      {ok, URL} ->
-			  [{logs, URL}|Fs3];
-		      error ->
-			  Fs3
-		  end;
-	      false ->
-		  Fs3
-	  end,
+		true ->
+			case mod_muc_log:get_url(StateData) of
+			{ok, URL} ->
+				[{logs, URL}|Fs3];
+			error ->
+				Fs3
+			end;
+		false ->
+			Fs3
+		end,
+	Fs5 = case Config#config.time_remained > 0 of
+		true ->
+			[{timeremained, integer_to_binary(Config#config.time_remained)}|Fs4];
+		false ->
+			Fs4
+		end,
     #xdata{type = result,
-	   fields = muc_roominfo:encode(Fs4, Lang)}.
+	   fields = muc_roominfo:encode(Fs5, Lang)}.
 
 -spec process_iq_disco_items(jid(), iq(), state()) ->
 				    {error, stanza_error()} | {result, disco_items()}.

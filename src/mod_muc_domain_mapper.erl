@@ -29,8 +29,10 @@ start(_Host, _Opts) ->
 
 stop(_Host) ->
     ejabberd_hooks:delete(filter_packet, ?MODULE, filter_packet, 10),
-    ets:delete(roomless_iqs),
-    ok.
+    try ets:delete(roomless_iqs)
+    catch
+        _:_ -> ok
+    end.
 
 depends(_Host, _Opts) ->
     [].

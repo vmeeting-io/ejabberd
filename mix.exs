@@ -70,6 +70,8 @@ defmodule Ejabberd.Mixfile do
              if_version_below('22', [{:d, :LAGER}]) ++
              if_version_below('23', [{:d, :USE_OLD_CRYPTO_HMAC}]) ++
              if_version_below('23', [{:d, :USE_OLD_PG2}]) ++
+             if_version_below('24', [{:d, :COMPILER_REPORTS_ONLY_LINES}]) ++
+             if_version_below('24', [{:d, :SYSTOOLS_APP_DEF_WITHOUT_OPTIONAL}]) ++
              if_function_exported(:erl_error, :format_exception, 6, [{:d, :HAVE_ERL_ERROR}])
     defines = for {:d, value} <- result, do: {:d, value}
     result ++ [{:d, :ALL_DEFS, defines}]
@@ -85,31 +87,31 @@ defmodule Ejabberd.Mixfile do
   end
 
   defp deps do
-    [{:lager, "~> 3.6.0"},
-     {:p1_utils, "~> 1.0"},
-     {:fast_xml, "~> 1.1", override: true},
-     {:xmpp, git: "https://github.com/vmeeting-io/xmpp.git", ref: "37a2316cf1e31056085437baa2097dbefcab6343"},
+    [{:base64url, "~> 0.0.1"},
      {:cache_tab, "~> 1.0"},
-     {:stringprep, "~> 1.0"},
-     {:fast_yaml, "~> 1.0"},
-     {:fast_tls, "~> 1.1"},
-     {:stun, "~> 1.0.41"},
-     {:esip, "~> 1.0.32"},
-     {:p1_mysql, "~> 1.0"},
-     {:mqtree, "~> 1.0"},
-     {:p1_pgsql, "~> 1.1"},
-     {:jiffy, "~> 1.0.4"},
-     {:p1_oauth2, "~> 0.6.1"},
      {:distillery, "~> 2.0"},
-     {:pkix, "~> 1.0"},
-     {:ex_doc, ">= 0.0.0", only: :dev},
      {:eimp, "~> 1.0"},
-     {:base64url, "~> 0.0.1"},
-     {:yconf, "~> 1.0"},
-     {:uuid, "~> 2.0", hex: :uuid_erl},
-     {:jose, "~> 1.8"},
+     {:esip, "~> 1.0"},
+     {:ex_doc, ">= 0.0.0", only: :dev},
+     {:fast_tls, "~> 1.1"},
+     {:fast_xml, "~> 1.1"},
+     {:fast_yaml, "~> 1.0"},
      {:idna, "~> 6.0"},
-     {:p1_acme, "~> 1.0"}]
+     {:jiffy, "~> 1.0.5"},
+     {:jose, "~> 1.8"},
+     {:lager, "~> 3.9.1"},
+     {:mqtree, "~> 1.0"},
+     {:p1_acme, "~> 1.0"},
+     {:p1_mysql, "~> 1.0"},
+     {:p1_oauth2, "~> 0.6"},
+     {:p1_pgsql, "~> 1.1"},
+     {:p1_utils, "~> 1.0"},
+     {:pkix, "~> 1.0"},
+     {:stringprep, ">= 1.0.26", override: true},
+     {:stun, "~> 1.0"},
+     {:xmpp, git: "https://github.com/vmeeting-io/xmpp.git", ref: "9e8862d80ae058bcf11ad3532adc7107bdf18491"},
+     {:yconf, "~> 1.0"},
+     {:uuid, "~> 2.0", hex: :uuid_erl}]
     ++ cond_deps()
   end
 
@@ -126,11 +128,11 @@ defmodule Ejabberd.Mixfile do
   end
 
   defp cond_deps do
-    for {:true, dep} <- [{config(:sqlite), {:sqlite3, "~> 1.1"}},
+    for {:true, dep} <- [{config(:pam), {:epam, "~> 1.0"}},
                          {config(:redis), {:eredis, "~> 1.0"}},
                          {config(:zlib), {:ezlib, "~> 1.0"}},
-                         {config(:pam), {:epam, "~> 1.0"}},
-                         {config(:tools), {:luerl, "~> 0.3.1"}}], do:
+                         {config(:lua), {:luerl, "~> 0.3.1"}},
+                         {config(:sqlite), {:sqlite3, "~> 1.1"}}], do:
       dep
   end
 

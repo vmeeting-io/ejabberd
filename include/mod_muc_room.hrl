@@ -125,7 +125,8 @@
     hibernate_timer         = none :: reference() | none | hibernating,
     room_id                 = <<"">> :: binary(),
     speakerstats            = #{} :: #{binary() => #{}},
-    dominantSpeakerId       = <<"">> :: binary()
+    dominantSpeakerId       = <<"">> :: binary(),
+    lobbyroom               = <<"">> :: binary()
 }).
 
 -type users() :: #{ljid() => #user{}}.

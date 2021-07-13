@@ -684,14 +684,14 @@ create_room_with_opts(Name1, Host1, ServerHost1, CustomRoomOpts) ->
 		    end,
 		    %% Start the room
 		    {ok, Pid} = mod_muc_room:start(
-			Host,
-			ServerHost,
-			{Access, AcCreate, AcAdmin, AcPer, AcMam},
-			Name,
-			HistorySize,
-			RoomShaper,
-			RoomOpts,
-			QueueType),
+				Host,
+				ServerHost,
+				{Access, AcCreate, AcAdmin, AcPer, AcMam},
+				Name,
+				HistorySize,
+				RoomShaper,
+				RoomOpts,
+				QueueType),
 		    mod_muc:register_online_room(Name, Host, Pid),
 		    ok;
 		_ ->

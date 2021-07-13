@@ -161,9 +161,10 @@ on_start_room(State, _ServerHost, Room, Host) ->
     {_, _Rep} -> State
     end.
 
-on_room_destroyed(_ServerHost, _Room, Host, RoomID) ->
+on_room_destroyed(State, _ServerHost, _Room, Host) ->
     % TODO: check if the room name start with __jicofo-health-check
     [_ , SiteID | _] = string:split(Host, ".", all),
+    RoomID = State#state.room_id,
 
     Url = "http://vmapi:5000/sites/"
             ++ binary:bin_to_list(SiteID)
@@ -171,7 +172,8 @@ on_room_destroyed(_ServerHost, _Room, Host, RoomID) ->
             ++ binary:bin_to_list(RoomID),
     ContentType = "application/x-www-form-urlencoded",
 
-    httpc:request(delete, {Url, [], ContentType, []}, [], []).
+    httpc:request(delete, {Url, [], ContentType, []}, [], []),
+    State.
 
 depends(_Host, _Opts) ->
     [].

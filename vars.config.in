@@ -23,7 +23,6 @@
 {full_xml, @full_xml@}.
 {db_type, @db_type@}.
 {debug, @debug@}.
-{hipe, @hipe@}.
 {new_sql_schema, @new_sql_schema@}.
 
 %% Ad-hoc directories with source files
@@ -40,11 +39,13 @@
 {elixir, @elixir@}.
 {stun, @stun@}.
 {sip, @sip@}.
+{lua, @lua@}.
 
 %% Version
 {vsn, "@PACKAGE_VERSION@"}.
 
 %% Variables for overlay template files
+{description, "@PACKAGE_NAME@"}.
 
 %% Platform-specific installation paths
 {release, true}.

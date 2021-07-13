@@ -14,7 +14,7 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, process/2,
-        on_start_room/3, on_room_destroyed/3, on_vm_pre_disco_info/1, mod_doc/0]).
+        on_start_room/3, on_room_destroyed/4, on_vm_pre_disco_info/1, mod_doc/0]).
 
 start(Host, _Opts) ->
     % This could run multiple times on different server host,
@@ -25,13 +25,13 @@ start(Host, _Opts) ->
     end,
 
     ejabberd_hooks:add(start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
+    ejabberd_hooks:add(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
     ejabberd_hooks:add(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
 stop(Host) ->
     ejabberd_hooks:delete(start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
+    ejabberd_hooks:delete(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
     ejabberd_hooks:delete(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
@@ -72,12 +72,12 @@ on_start_room(_ServerHost, Room, Host) ->
     ets:insert(vm_room_data, {Room, RoomData}),
     ok.
 
-on_room_destroyed(_ServerHost, Room, Host) ->
+on_room_destroyed(State, _ServerHost, Room, Host) ->
     try ets:delete(vm_room_data, Room)
     catch
         _:badarg -> ok
     end,
-    ok.
+    State.
 
 on_vm_pre_disco_info(#state{room = Room, host = Host} = StateData) ->
     case ets:lookup(vm_room_data, Room) of
@@ -165,7 +165,7 @@ process_event(Data) ->
     {200, [], []}.
 
 destroy_room(RoomPID, Message)
-    when RoomPID == room_not_found orelse RoomPID == invalid_service ->
+    when RoomPID == room_not_found; RoomPID == invalid_service ->
     ?INFO_MSG("destroy_room ERROR: ~p", [RoomPID]),
     ok;
 destroy_room(RoomPID, Message) ->
