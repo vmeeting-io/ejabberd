@@ -1242,7 +1242,7 @@ mod_options(Host) ->
      {db_type, ejabberd_config:default_db(Host, ?MODULE)},
      {ram_db_type, ejabberd_config:default_ram_db(Host, ?MODULE)},
      {history_size, 20},
-     {host, <<"conference.", Host/binary>>},
+     {host, <<"muc.", Host/binary>>},
      {hosts, []},
      {name, ?T("Chatrooms")},
      {max_room_desc, infinity},
