@@ -3,13 +3,15 @@
 -export([
     find_nick_by_jid/2,
     get_state_from_jid/1,
+    get_room_pid_from_jid/1,
     get_room_state/2,
     set_room_state/3,
     is_healthcheck_room/1,
     room_jid_match_rewrite/1,
     room_jid_match_rewrite/2,
     internal_room_jid_match_rewrite/2,
-    extract_subdomain/1
+    extract_subdomain/1,
+    get_subtag_value/2
 ]).
 
 -include_lib("xmpp/include/xmpp.hrl").
@@ -76,6 +78,11 @@ get_state_from_jid(RoomJid) ->
     { Room, Host, _ } = jid:split(RoomJid),
     get_room_state(Room, Host).
 
+-spec get_room_pid_from_jid(jid()) -> pid() | none.
+get_room_pid_from_jid(RoomJid) ->
+    { Room, Host, _ } = jid:split(RoomJid),
+    mod_muc_admin:get_room_pid(Room, Host).
+
 % Utility function to split room JID to include room name and subdomain
 % (e.g. from room1@conference.foo.example.com/res returns (room1, example.com, res, foo))
 room_jid_split_subdomain(RoomJid) ->
@@ -88,7 +95,7 @@ room_jid_split_subdomain(RoomJid) ->
         {ok, RE} = re:compile(<<"^", Prefix/binary, "\.([^.]+)\.", Base/binary, "$">>),
         case re:run(H, RE, [{capture, [1], binary}]) of
         nomatch -> {N, H, R, <<>>};
-        {match, [Subdomain]} -> 
+        {match, [Subdomain]} ->
             % ?INFO_MSG("room_jid_split_subdomain ~p", [{N, H, R, Subdomain}]),
             {N, H, R, Subdomain}
         end
@@ -135,7 +142,7 @@ room_jid_match_rewrite(RoomJid, Stanza) ->
 extract_subdomain(Room) ->
     % optimization, skip matching if there is no subdomain, no [subdomain] part in the beginning of the node
     case string:find(Room, "[") of
-    Room -> 
+    Room ->
         {ok, RE} = re:compile(<<"^\\[([^\\]]+)\\](.+)$">>),
         {match, [Subdomain, Node]} = re:run(Room, RE, [{capture, [1,2], binary}]),
         {Subdomain, Node};
@@ -154,18 +161,26 @@ internal_room_jid_match_rewrite(RoomJid, Stanza) ->
 
     case {(H /= MucDomain) or (not jid:is_nodename(N)), ets:lookup(roomless_iqs, Id)} of
     {true, []} -> RoomJid;
-    {true, [{_, Result}]} -> 
+    {true, [{_, Result}]} ->
         ets:delete(roomless_iqs, Id),
         Result;
-    _ -> 
+    _ ->
         case extract_subdomain(N) of
-        {Subdomain, Node} -> 
+        {Subdomain, Node} ->
             % Ok, rewrite room_jid address to pretty format
             NewRoomJid = jid:make({Node, <<Prefix/binary, ".", Subdomain/binary, ".", Base/binary>>, R}),
             ?DEBUG("Rewrote to ~ts", [jid:to_string(NewRoomJid)]),
             NewRoomJid;
-        _ -> 
+        _ ->
             ?DEBUG("Not rewriting... unexpected node format: ~ts", [N]),
             RoomJid
         end
     end.
+
+
+get_subtag_value( [El | Els], Name) ->
+    case El of
+      #xmlel{name = Name} -> fxml:get_tag_cdata(El);
+      _ -> get_subtag_value(Els, Name)
+    end;
+get_subtag_value([], _) -> not_found.

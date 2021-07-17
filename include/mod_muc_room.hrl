@@ -126,7 +126,10 @@
     room_id                 = <<"">> :: binary(),
     speakerstats            = #{} :: #{binary() => #{}},
     dominantSpeakerId       = <<"">> :: binary(),
-    lobbyroom               = <<"">> :: binary()
+    lobbyroom               = <<"">> :: binary(),
+    % internal state that should be get/set directly from state value
+    % i.e., get/set via intermediate functions are not implemented yet
+    main_room_pid           = none :: pid() | none
 }).
 
 -type users() :: #{ljid() => #user{}}.

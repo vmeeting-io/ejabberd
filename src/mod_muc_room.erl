@@ -56,6 +56,7 @@
 	 get_subscribers/1,
 	 service_message/2,
 	 service_notice/2,
+	 broadcast_json_msg/3,
 	 get_disco_item/4]).
 
 %% gen_fsm callbacks
@@ -278,6 +279,27 @@ service_notice(Pid, Text) ->
 	{ok, StateData} = get_state(Pid),
     send_wrapped_multiple(
       StateData#state.jid,
+      get_users_and_subscribers(StateData),
+      MessagePkt,
+      ?NS_MUCSUB_NODES_MESSAGES,
+      StateData).
+
+%% Room can be pid() or state(). state() is used when get_state(Pid) is not possible,
+%% e.g., during state change (FIXME: is this even true?)
+-spec broadcast_json_msg(pid() | state(), jid(), map()) -> ok.
+broadcast_json_msg(Room, FromNick, Msg) ->
+	SubEl = #xmlel{name = <<"json-message">>,
+					attrs = [{<<"xmlns">>, <<"http://jitsi.org/jitmeet">>}],
+					children = [{xmlcdata, jiffy:encode(Msg)}]},
+    MessagePkt = #message{type = groupchat, sub_els = [SubEl]},
+	case Room of
+		#state{} ->
+			StateData = Room;
+		_ ->
+			{ok, StateData} = get_state(Room)
+	end,
+    send_wrapped_multiple(
+	  jid:replace_resource(StateData#state.jid, FromNick),
       get_users_and_subscribers(StateData),
       MessagePkt,
       ?NS_MUCSUB_NODES_MESSAGES,
@@ -1584,18 +1606,24 @@ get_affiliation(LJID, StateData) ->
 do_get_affiliation(JID, #state{config = #config{persistent = false}} = StateData) ->
     do_get_affiliation_fallback(JID, StateData);
 do_get_affiliation(JID, StateData) ->
-    Room = StateData#state.room,
-    Host = StateData#state.host,
-    LServer = JID#jid.lserver,
-    LUser = JID#jid.luser,
-    ServerHost = StateData#state.server_host,
-    Mod = gen_mod:db_mod(ServerHost, mod_muc),
-    case Mod:get_affiliation(ServerHost, Room, Host, LUser, LServer) of
-	{error, _} ->
-	    do_get_affiliation_fallback(JID, StateData);
-	{ok, Affiliation} ->
-	    Affiliation
-    end.
+	% if this is lobbyroom, get affiliation from main room
+	if is_pid(StateData#state.main_room_pid) ->
+		{ok, MainRoomState} = get_state(StateData#state.main_room_pid),
+		get_affiliation(JID, MainRoomState);
+	true ->
+		Room = StateData#state.room,
+		Host = StateData#state.host,
+		LServer = JID#jid.lserver,
+		LUser = JID#jid.luser,
+		ServerHost = StateData#state.server_host,
+		Mod = gen_mod:db_mod(ServerHost, mod_muc),
+		case Mod:get_affiliation(ServerHost, Room, Host, LUser, LServer) of
+		{error, _} ->
+			do_get_affiliation_fallback(JID, StateData);
+		{ok, Affiliation} ->
+			Affiliation
+		end
+	end.
 
 -spec do_get_affiliation_fallback(jid(), state()) -> affiliation() | {affiliation(),  binary()}.
 do_get_affiliation_fallback(JID, StateData) ->
@@ -2078,7 +2106,12 @@ normal_users_acc({User, _, _} , _, AccIn) ->
 		  (jid(), binary(), iq(), state()) -> {error, stanza_error()} |
 						      {ignore, state()} |
 						      {result, muc_subscribe(), state()}.
-add_new_user(From, Nick, Packet, StateData) ->
+add_new_user(From, Nick, Packet, State) ->
+	ServerHost = State#state.server_host,
+	StateData = ejabberd_hooks:run_fold(vm_pre_join_room,
+										ServerHost,
+										State,
+										[ServerHost, Packet, From, Nick]),
     Lang = xmpp:get_lang(Packet),
     MaxUsers = get_max_users(StateData),
     MaxAdminUsers = MaxUsers +
@@ -2142,7 +2175,12 @@ add_new_user(From, Nick, Packet, StateData) ->
 			xmpp:err_registration_required(ErrText, Lang)
 		end,
 	  if not IsSubscribeRequest ->
-		  ejabberd_router:route_error(Packet, Err),
+		  %% add lobbyroom information in the case lobbyroom is enabled
+		  LobbyRoomEl = #xmlel{name = <<"lobbyroom">>,
+								attrs = [{<<"xmlns">>, <<"http://jabber.org/protocol/muc">>}],
+								children = [{xmlcdata, State#state.lobbyroom}]},
+		  Els = xmpp:get_els(Packet),
+		  ejabberd_router:route_error(xmpp:set_els(Packet, [LobbyRoomEl | Els]), Err),
 		  StateData;
 	     true ->
 		  {error, Err}
@@ -2183,7 +2221,6 @@ add_new_user(From, Nick, Packet, StateData) ->
 					   add_online_user(From, Nick, Role, StateData)),
 			      send_initial_presences_and_messages(
                        From, Nick, Packet, NewState, StateData),
-				  ServerHost = StateData#state.server_host,
 				  RoomID = StateData#state.room_id,
                   ejabberd_hooks:run_fold(vm_join_room, ServerHost, NewState, [ServerHost, Packet, From, RoomID, Nick]);
 			 true ->
@@ -2968,6 +3005,7 @@ process_item_change(Item, SD, UJID) ->
 		%% forget the affiliation completely
 		SD;
 	    {JID, role, none, Reason} ->
+		ejabberd_hooks:run(vm_kick_participant, SD#state.server_host, [UJID, JID, SD]),
 		send_kickban_presence(UJID, JID, Reason, 307, SD),
 		set_role(JID, none, SD);
 	    {JID, affiliation, none, Reason} ->
@@ -3431,7 +3469,7 @@ process_iq_owner(From, #iq{type = set, lang = Lang,
 				is_password_settings_correct(Options, StateData) of
 				true ->
 					try
-						StateData1 = ejabberd_hooks:run_fold(vm_change_state, StateData#state.server_host, StateData, [Options]),
+						StateData1 = ejabberd_hooks:run_fold(vm_change_state, StateData#state.server_host, StateData, [From, Options]),
 						set_config(Options, StateData1, Lang)
 					catch  _:{badmatch, {error, #stanza_error{}} = Err} ->
 						Err
@@ -4590,6 +4628,9 @@ route_invitation(From, Pkt, Invitation, Lang, StateData) ->
 				   Msg,
 				   [StateData#state.jid, StateData#state.config,
 				    From, JID, Reason, Pkt]),
+	ejabberd_hooks:run(vm_muc_invite,
+				   StateData#state.server_host,
+				   [StateData, From, JID, Reason, Pkt]),
     ejabberd_router:route(Msg2),
     JID.
 

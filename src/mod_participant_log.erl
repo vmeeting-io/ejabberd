@@ -51,12 +51,8 @@ on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
             },
 
         SubEls = Packet#presence.sub_els,
-        ElName = get_subtag(SubEls, <<"nick">>),
-        Name = fxml:get_tag_cdata(ElName),
-        % ElEmail = get_subtag(SubEls, <<"email">>),
-        % Email = fxml:get_tag_cdata(ElEmail),
-        ElStatsID = get_subtag(SubEls, <<"stats-id">>),
-        StatsID = fxml:get_tag_cdata(ElStatsID),
+        Name = vm_util:get_subtag_value(SubEls, <<"nick">>),
+        StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
 
         Body = #{
                 conference => State#state.room_id,
@@ -119,9 +115,7 @@ on_broadcast_presence(_ServerHost,
         [{LJID, VMUser}] ->
             VMUserID = maps:get(id, VMUser),
             VMUserName =  maps:get(name, VMUser),
-
-            ElName = get_subtag(SubEls, <<"nick">>),
-            Name = fxml:get_tag_cdata(ElName),
+            Name = vm_util:get_subtag_value(SubEls, <<"nick">>),
 
             if VMUserName /= Name ->
                 Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
@@ -184,10 +178,3 @@ mod_options(_Host) ->
 mod_doc() ->
     #{desc =>
         ?T("mod_participant_log")}.
-
-get_subtag( [El | Els], Name) ->
-    case El of
-      #xmlel{name = Name} -> El;
-      _ -> get_subtag(Els, Name)
-    end;
-get_subtag([], _) -> false.
