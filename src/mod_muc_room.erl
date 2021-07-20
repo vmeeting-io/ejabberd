@@ -57,6 +57,7 @@
 	 service_message/2,
 	 service_notice/2,
 	 broadcast_json_msg/3,
+	 kick_all/2,
 	 get_disco_item/4]).
 
 %% gen_fsm callbacks
@@ -304,6 +305,22 @@ broadcast_json_msg(Room, FromNick, Msg) ->
       MessagePkt,
       ?NS_MUCSUB_NODES_MESSAGES,
       StateData).
+
+% kick all user/subsciber by setting their affilication to outcast
+% use this one instead of destroy room due to issue
+% https://github.com/vmeeting-io/vmeeting/issues/259
+-spec kick_all(pid(), binary()) -> ok | error.
+kick_all(RoomPid, Reason) ->
+	case get_state(RoomPid) of
+	{ok, State} ->
+		Users = get_users_and_subscribers(State),
+		maps:fold(fun(_, #user{jid = Jid}, _) ->
+				change_item(RoomPid, Jid, affiliation, outcast, Reason)
+			end, [], Users),
+		ok;
+	_ ->
+		error
+	end.
 
 %%%----------------------------------------------------------------------
 %%% Callback functions from gen_fsm
@@ -961,7 +978,7 @@ terminate(Reason, _StateName,
 		add_to_log(room_existence, stopped, StateData),
 		case (StateData#state.config)#config.persistent of
 		    false ->
-			ejabberd_hooks:run_fold(vm_room_destroyed, LServer, StateData, [LServer, Room, Host]),
+			ejabberd_hooks:run(room_destroyed, LServer, [StateData, LServer, Room, Host]),
 			ok;
 		    _ ->
 			ok

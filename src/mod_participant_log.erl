@@ -25,14 +25,14 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:add(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:add(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
+    ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 stop(Host) ->
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:delete(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:delete(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:delete(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
+    ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
     User = JID#jid.user,
@@ -166,8 +166,7 @@ on_room_destroyed(State, _ServerHost, _Room, Host) ->
             ++ binary:bin_to_list(RoomID),
     ContentType = "application/x-www-form-urlencoded",
 
-    httpc:request(delete, {Url, [], ContentType, []}, [], []),
-    State.
+    httpc:request(delete, {Url, [], ContentType, []}, [], []).
 
 depends(_Host, _Opts) ->
     [].

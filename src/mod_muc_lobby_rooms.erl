@@ -23,7 +23,7 @@
 start(Host, _Opts) ->
     ejabberd_hooks:add(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 50),
-    ejabberd_hooks:add(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 50),
+    ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 50),
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:add(vm_pre_join_room, Host, ?MODULE, on_pre_join_room, 100),
     ejabberd_hooks:add(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
@@ -34,7 +34,7 @@ start(Host, _Opts) ->
 stop(Host) ->
     ejabberd_hooks:delete(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
-    ejabberd_hooks:delete(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 50),
+    ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 50),
     ejabberd_hooks:delete(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:delete(vm_pre_join_room, Host, ?MODULE, on_pre_join_room, 100),
     ejabberd_hooks:delete(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
@@ -73,10 +73,9 @@ on_start_room(State, ServerHost, Room, Host) ->
 on_room_destroyed(State, _ServerHost, Room, Host) ->
     case State#state.lobbyroom of
     <<>> ->
-        State;
+        ok;
     LobbyRoom ->
-        destroy_lobby_room(LobbyRoom, nil),
-        State
+        destroy_lobby_room(LobbyRoom, nil)
     end.
 
 on_change_state(State, FromJid, Options) ->

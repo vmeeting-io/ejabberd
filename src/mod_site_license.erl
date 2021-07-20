@@ -25,13 +25,13 @@ start(Host, _Opts) ->
     end,
 
     ejabberd_hooks:add(start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:add(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
+    ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
     ejabberd_hooks:add(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
 stop(Host) ->
     ejabberd_hooks:delete(start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:delete(vm_room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
+    ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
     ejabberd_hooks:delete(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
@@ -73,11 +73,11 @@ on_start_room(_ServerHost, Room, Host) ->
     ok.
 
 on_room_destroyed(State, _ServerHost, Room, Host) ->
+    ?INFO_MSG("mod_site_license on_room_destroyed ~p", [Room]),
     try ets:delete(vm_room_data, Room)
     catch
         _:badarg -> ok
-    end,
-    State.
+    end.
 
 on_vm_pre_disco_info(#state{room = Room, host = Host} = StateData) ->
     case ets:lookup(vm_room_data, Room) of
@@ -127,7 +127,7 @@ process_event(Data) ->
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} ->
-        destroy_room(RoomPID, <<"destroyed_by_host">>);
+        destroy_room(RoomPID, <<"">>);
     _ ->
         case maps:find(<<"userDeviceAccessDisabled">>, DataJSON) of
         {ok, UDAD} ->
@@ -170,11 +170,12 @@ destroy_room(RoomPID, Message)
     ok;
 destroy_room(RoomPID, Message) ->
     Mes = binary:list_to_bin(io_lib:format(Message, [])),
-    mod_muc_room:destroy(RoomPID, Mes).
+    mod_muc_room:kick_all(RoomPID, Mes),
+    ?INFO_MSG("destroy_room success: ~p", [RoomPID]).
 
 destroy_room_after_secs(RoomPID, Message, After) ->
     Mes = binary:list_to_bin(io_lib:format(Message, [])),
-    timer:apply_after(After * 1000, mod_muc_room, destroy, [RoomPID, Mes]).
+    timer:apply_after(After * 1000, mod_site_license, destroy_room, [RoomPID, Mes]).
 
 
 split_room_and_host(Room) ->
