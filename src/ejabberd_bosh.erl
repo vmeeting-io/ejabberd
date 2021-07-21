@@ -40,7 +40,7 @@
 -export([init/1, wait_for_session/2, wait_for_session/3,
 	 active/2, active/3, handle_event/3, print_state/1,
 	 handle_sync_event/4, handle_info/3, terminate/3,
-	 code_change/4]).
+	 code_change/4, get_query/1]).
 
 -include("logger.hrl").
 -include_lib("xmpp/include/xmpp.hrl").
@@ -82,30 +82,32 @@
 -export_type([bosh_socket/0]).
 
 -record(state,
-	{host = <<"">>                            :: binary(),
-         sid = <<"">>                             :: binary(),
-         el_ibuf                                  :: p1_queue:queue(),
-         el_obuf                                  :: p1_queue:queue(),
-         shaper_state = none                      :: ejabberd_shaper:shaper(),
-         c2s_pid                                  :: pid() | undefined,
-	 xmpp_ver = <<"">>                        :: binary(),
-         inactivity_timer                         :: reference() | undefined,
-         wait_timer                               :: reference() | undefined,
-	 wait_timeout = ?DEFAULT_WAIT             :: pos_integer(),
-         inactivity_timeout                       :: pos_integer(),
-	 prev_rid = 0                             :: non_neg_integer(),
-         prev_key = <<"">>                        :: binary(),
-         prev_poll                                :: erlang:timestamp() | undefined,
-         max_concat = unlimited                   :: unlimited | non_neg_integer(),
-	 responses = gb_trees:empty()             :: gb_trees:tree(),
-	 receivers = gb_trees:empty()             :: gb_trees:tree(),
-	 shaped_receivers                         :: p1_queue:queue(),
-         ip                                       :: inet:ip_address(),
-         max_requests = 1                         :: non_neg_integer()}).
+	{host = <<"">>                           :: binary(),
+	sid = <<"">>                             :: binary(),
+	el_ibuf                                  :: p1_queue:queue(),
+	el_obuf                                  :: p1_queue:queue(),
+	shaper_state = none                      :: ejabberd_shaper:shaper(),
+	c2s_pid                                  :: pid() | undefined,
+	xmpp_ver = <<"">>                        :: binary(),
+	inactivity_timer                         :: reference() | undefined,
+	wait_timer                               :: reference() | undefined,
+	wait_timeout = ?DEFAULT_WAIT             :: pos_integer(),
+	inactivity_timeout                       :: pos_integer(),
+	prev_rid = 0                             :: non_neg_integer(),
+	prev_key = <<"">>                        :: binary(),
+	prev_poll                                :: erlang:timestamp() | undefined,
+	max_concat = unlimited                   :: unlimited | non_neg_integer(),
+	responses = gb_trees:empty()             :: gb_trees:tree(),
+	receivers = gb_trees:empty()             :: gb_trees:tree(),
+	shaped_receivers                         :: p1_queue:queue(),
+	ip                                       :: inet:ip_address(),
+	max_requests = 1                         :: non_neg_integer(),
+	q = []                  				 :: [{binary() | nokey, binary()}] }).
 
 -record(body,
 	{http_reason = <<"">> :: binary(),
          attrs = []           :: [{any(), any()}],
+		 q = []        		  :: [{binary() | nokey, binary()}],
          els = []             :: [fxml_stream:xml_stream_el()],
          size = 0             :: non_neg_integer()}).
 
@@ -185,7 +187,7 @@ get_transport(_Socket) ->
 get_owner({http_bind, FsmRef, _IP}) ->
     FsmRef.
 
-process_request(Data, IP, Type) ->
+process_request({Query, Data}, IP, Type) ->
     Opts1 = ejabberd_c2s_config:get_c2s_limits(),
     Opts = case Type of
                xml ->
@@ -216,7 +218,7 @@ process_request(Data, IP, Type) ->
 						  <<"improper-addressing">>}]},
                                       Type, Body);
 		    SID == <<"">> ->
-			case start(Body, IP, make_sid()) of
+			case start(Body#body{q = Query}, IP, make_sid()) of
 			  {ok, Pid} -> process_request(Pid, Body, IP, Type);
 			  _Err ->
 			      bosh_response_with_msg(#body{http_reason =
@@ -266,7 +268,7 @@ process_request(Pid, Req, _IP, Type) ->
                         Type)
     end.
 
-init([#body{attrs = Attrs}, IP, SID]) ->
+init([#body{attrs = Attrs, q = Query}, IP, SID]) ->
     Opts1 = ejabberd_c2s_config:get_c2s_limits(),
     Opts2 = [{xml_socket, true} | Opts1],
     Shaper = none,
@@ -294,7 +296,8 @@ init([#body{attrs = Attrs}, IP, SID]) ->
 			   max_concat = MaxConcat, el_obuf = buf_new(XMPPDomain),
 			   inactivity_timeout = Inactivity,
 			   shaped_receivers = ShapedReceivers,
-			   shaper_state = ShaperState},
+			   shaper_state = ShaperState,
+			   q = Query},
 	    NewState = restart_inactivity_timer(State),
 	    case mod_bosh:open_session(SID, self()) of
 		ok ->
@@ -557,10 +560,15 @@ handle_sync_event(deactivate_socket, _From, StateName,
 		  StateData) ->
     {reply, ok, StateName,
      StateData#state{c2s_pid = undefined}};
+handle_sync_event(get_query, _From, StateName, StateData) ->
+    {reply, StateData#state.q, StateName, StateData};
 handle_sync_event(_Event, _From, StateName, State) ->
     ?ERROR_MSG("Unexpected sync event in '~ts': ~p",
 	       [StateName, _Event]),
     {reply, {error, badarg}, StateName, State}.
+
+get_query(PID) ->
+    p1_fsm:sync_send_all_state_event(PID, get_query).
 
 handle_info({timeout, TRef, wait_timeout}, StateName,
 	    #state{wait_timer = TRef} = State) ->

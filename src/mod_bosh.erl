@@ -66,10 +66,10 @@ process([], #request{method = 'POST', data = <<>>}) ->
      #xmlel{name = <<"h1">>, attrs = [],
 	    children = [{xmlcdata, <<"400 Bad Request">>}]}};
 process([],
-	#request{method = 'POST', data = Data, ip = IP, headers = Hdrs}) ->
+	#request{method = 'POST', data = Data, ip = IP, q = Query, headers = Hdrs} = Request) ->
     ?DEBUG("Incoming data: ~p", [Data]),
     Type = get_type(Hdrs),
-    ejabberd_bosh:process_request(Data, IP, Type);
+    ejabberd_bosh:process_request({Query, Data}, IP, Type);
 process([], #request{method = 'GET', data = <<>>}) ->
     {200, ?HEADER(?CT_XML), get_human_html_xmlel()};
 process([], #request{method = 'OPTIONS', data = <<>>}) ->

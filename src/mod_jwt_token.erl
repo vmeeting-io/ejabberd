@@ -47,9 +47,8 @@ jwt_secret(Host) ->
 
 
 
-check_jwt_token(_Result, WsPid, Host) ->
-    WS = ejabberd_http_ws:get_ws(WsPid),
-    Query = WS#ws.q,
+check_jwt_token(_Result, XmppSocket, Host) ->
+    Query = xmpp_socket:get_query(XmppSocket),
     EnableJWT = enable_jwt(Host),
     if EnableJWT == true ->
         JWTSecret = jwt_secret(Host),
