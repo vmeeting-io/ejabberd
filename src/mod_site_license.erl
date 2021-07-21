@@ -127,7 +127,7 @@ process_event(Data) ->
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} ->
-        destroy_room(RoomPID, <<"">>);
+        destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ ->
         case maps:find(<<"userDeviceAccessDisabled">>, DataJSON) of
         {ok, UDAD} ->
