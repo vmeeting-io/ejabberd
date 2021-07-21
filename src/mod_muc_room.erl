@@ -3018,55 +3018,55 @@ process_item_change(UJID) ->
 process_item_change(Item, SD, UJID) ->
     try case Item of
 	    {JID, affiliation, owner, _} when JID#jid.luser == <<"">> ->
-		%% If the provided JID does not have username,
-		%% forget the affiliation completely
-		SD;
+			%% If the provided JID does not have username,
+			%% forget the affiliation completely
+			SD;
 	    {JID, role, none, Reason} ->
-		ejabberd_hooks:run(vm_kick_participant, SD#state.server_host, [UJID, JID, SD]),
-		send_kickban_presence(UJID, JID, Reason, 307, SD),
-		set_role(JID, none, SD);
+			ejabberd_hooks:run(vm_kick_participant, SD#state.server_host, [UJID, JID, SD]),
+			send_kickban_presence(UJID, JID, Reason, 307, SD),
+			set_role(JID, none, SD);
 	    {JID, affiliation, none, Reason} ->
-		case (SD#state.config)#config.members_only of
-		    true ->
-			send_kickban_presence(UJID, JID, Reason, 321, none, SD),
-			maybe_send_affiliation(JID, none, SD),
-			SD1 = set_affiliation(JID, none, SD),
-			set_role(JID, none, SD1);
-		    _ ->
-			SD1 = set_affiliation(JID, none, SD),
-			SD2 = case (SD1#state.config)#config.moderated of
-			    true -> set_role(JID, visitor, SD1);
-			    false -> set_role(JID, participant, SD1)
-			end,
-			send_update_presence(JID, Reason, SD2, SD),
-			maybe_send_affiliation(JID, none, SD2),
-			SD2
-		end;
+			case (SD#state.config)#config.members_only of
+				true ->
+				send_kickban_presence(UJID, JID, Reason, 321, none, SD),
+				maybe_send_affiliation(JID, none, SD),
+				SD1 = set_affiliation(JID, none, SD),
+				set_role(JID, none, SD1);
+				_ ->
+				SD1 = set_affiliation(JID, none, SD),
+				SD2 = case (SD1#state.config)#config.moderated of
+					true -> set_role(JID, visitor, SD1);
+					false -> set_role(JID, participant, SD1)
+				end,
+				send_update_presence(JID, Reason, SD2, SD),
+				maybe_send_affiliation(JID, none, SD2),
+				SD2
+			end;
 	    {JID, affiliation, outcast, Reason} ->
-		send_kickban_presence(UJID, JID, Reason, 301, outcast, SD),
-		maybe_send_affiliation(JID, outcast, SD),
-		set_affiliation(JID, outcast, set_role(JID, none, SD), Reason);
+			send_kickban_presence(UJID, JID, Reason, 301, outcast, SD),
+			maybe_send_affiliation(JID, outcast, SD),
+			set_affiliation(JID, outcast, set_role(JID, none, SD), Reason);
 	    {JID, affiliation, A, Reason} when (A == admin) or (A == owner) ->
-		SD1 = set_affiliation(JID, A, SD, Reason),
-		SD2 = set_role(JID, moderator, SD1),
-		send_update_presence(JID, Reason, SD2, SD),
-		maybe_send_affiliation(JID, A, SD2),
-		SD2;
+			SD1 = set_affiliation(JID, A, SD, Reason),
+			SD2 = set_role(JID, moderator, SD1),
+			send_update_presence(JID, Reason, SD2, SD),
+			maybe_send_affiliation(JID, A, SD2),
+			SD2;
 	    {JID, affiliation, member, Reason} ->
-		SD1 = set_affiliation(JID, member, SD, Reason),
-		SD2 = set_role(JID, participant, SD1),
-		send_update_presence(JID, Reason, SD2, SD),
-		maybe_send_affiliation(JID, member, SD2),
-		SD2;
+			SD1 = set_affiliation(JID, member, SD, Reason),
+			SD2 = set_role(JID, participant, SD1),
+			send_update_presence(JID, Reason, SD2, SD),
+			maybe_send_affiliation(JID, member, SD2),
+			SD2;
 	    {JID, role, Role, Reason} ->
-		SD1 = set_role(JID, Role, SD),
-		send_new_presence(JID, Reason, SD1, SD),
-		SD1;
+			SD1 = set_role(JID, Role, SD),
+			send_new_presence(JID, Reason, SD1, SD),
+			SD1;
 	    {JID, affiliation, A, _Reason} ->
-		SD1 = set_affiliation(JID, A, SD),
-		send_update_presence(JID, SD1, SD),
-		maybe_send_affiliation(JID, A, SD1),
-		SD1
+			SD1 = set_affiliation(JID, A, SD),
+			send_update_presence(JID, SD1, SD),
+			maybe_send_affiliation(JID, A, SD1),
+			SD1
 	end
     catch ?EX_RULE(E, R, St) ->
 	    StackTrace = ?EX_STACK(St),
@@ -4199,7 +4199,7 @@ make_disco_info(_From, StateData) ->
 	   end,
     #disco_info{identities = [#identity{category = <<"conference">>,
 					type = <<"text">>,
-					name = (StateData#state.config)#config.title}],
+					name = StateData#state.room}],
 		features = Feats}.
 
 -spec process_iq_disco_info(jid(), iq(), state()) ->
@@ -4242,7 +4242,7 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	      end,
     Fs1 = [{roomname, Config#config.title},
 	   {description, Config#config.description},
-	   {contactjid, get_owners(StateData)},
+	%    {contactjid, get_owners(StateData)},
 	   {changesubject, Config#config.allow_change_subj},
 	   {allowinvites, Config#config.allow_user_invites},
 	   {allowpm, AllowPM},
