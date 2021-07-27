@@ -129,11 +129,11 @@ room_jid_match_rewrite(RoomJid, Stanza) ->
             ets:insert(roomless_iqs, {xmpp:get_id(Stanza), xmpp:get_to(Stanza)});
         true -> ok
         end,
-        ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string({N, MucDomain, R})]),
+        % ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string({N, MucDomain, R})]),
         {N, MucDomain, R};
     _ ->
         NewJid = {<<"[", S/binary, "]", N/binary>>, MucDomain, R},
-        ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string(NewJid)]),
+        % ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string(NewJid)]),
         NewJid
     end).
 
