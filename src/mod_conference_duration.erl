@@ -59,7 +59,7 @@ on_join_room(_ServerHost, Room, Host, JID) ->
             },
             ejabberd_router:route(Msg);
         _ ->
-            ?INFO_MSG("look up not found ~ts", []),
+            ?INFO_MSG("look up not found ~ts", [Room]),
             ok
         end
     end.
