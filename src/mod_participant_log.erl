@@ -9,7 +9,7 @@
 -include("vmeeting_common.hrl").
 
 %% gen_mod API callbacks
--export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
+-export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, on_join_room/6,
     on_broadcast_presence/3, on_leave_room/5, on_start_room/4,
     on_room_destroyed/4, mod_doc/0]).
 
@@ -34,13 +34,15 @@ stop(Host) ->
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
-on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
+on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
+    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
+    % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [Packet#presence.to#jid.server, MucHost]),
+    
     User = JID#jid.user,
 
-    case lists:member(User, ?WHITE_LIST_USERS) of
-    true -> ok;
-
-    false ->
+    case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
+    {true, false} ->
+        % ?INFO_MSG("mod_participant_log:joined ~ts", [jid:to_string(JID)]),
         {{Year, Month, Day}, {Hour, Min, Sec}} = erlang:localtime(),
         JoinTime = #{year => Year,
                 month => Month,
@@ -84,7 +86,8 @@ on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
             ets:insert(vm_users, {LJID, VMUser});
 
         {_, _Rep} -> ok
-        end
+        end;
+    _ -> ok
     end,
     State.
 
@@ -103,12 +106,13 @@ on_leave_room(State, _ServerHost, _Room, _Host, JID) ->
     State.
 
 on_broadcast_presence(_ServerHost,
-                        #presence{type = PresenceType, sub_els = SubEls},
+                        #presence{to = To, type = PresenceType, sub_els = SubEls},
                         #jid{user = User} = JID) ->
     IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
+    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
 
-    case {IsWhiteListUser, PresenceType} of
-    {false, available} ->
+    case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
+    {false, available, true} ->
         LJID = jid:tolower(JID),
 
         case ets:lookup(vm_users, LJID) of
@@ -135,44 +139,61 @@ on_broadcast_presence(_ServerHost,
     end.
 
 on_start_room(State, _ServerHost, Room, Host) ->
-    MeetingID = State#state.config#config.meeting_id,
-    {SiteID, Name} = vm_util:extract_subdomain(Room),
+    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
 
-    Url = "http://vmapi:5000/sites/"
-            ++ binary:bin_to_list(SiteID)
-            ++ "/conferences",
-    ContentType = "application/x-www-form-urlencoded",
-    ReqBody = uri_string:compose_query(
-                [{"name", Name}, {"meeting_id", MeetingID}]),
+    case string:equal(Host, MucHost) of
+    true ->
+        MeetingID = State#state.config#config.meeting_id,
+        {SiteID, Name} = vm_util:extract_subdomain(Room),
 
-    case httpc:request(patch, {Url, [], ContentType, ReqBody}, [], []) of
-    {ok, {{_, 201, _} , _Header, Rep}} ->
-        RepJSON = jiffy:decode(Rep, [return_maps]),
-        RoomID = maps:get(<<"_id">>, RepJSON),
-        State1 = State#state{room_id = RoomID},
-        State1;
+        Url = "http://vmapi:5000/sites/"
+                ++ binary:bin_to_list(SiteID)
+                ++ "/conferences",
+        ContentType = "application/x-www-form-urlencoded",
+        ReqBody = uri_string:compose_query(
+                    [{"name", Name}, {"meeting_id", MeetingID}]),
 
-    {_, _Rep} -> State
+        case httpc:request(patch, {Url, [], ContentType, ReqBody}, [], []) of
+        {ok, {{_, 201, _} , _Header, Rep}} ->
+            RepJSON = jiffy:decode(Rep, [return_maps]),
+            RoomID = maps:get(<<"_id">>, RepJSON),
+            State1 = State#state{room_id = RoomID},
+            State1;
+
+        {_, _Rep} -> State
+        end;
+    _ -> State
     end.
 
 on_room_destroyed(State, _ServerHost, _Room, Host) ->
-    % TODO: check if the room name start with __jicofo-health-check
-    [_ , SiteID | _] = string:split(Host, ".", all),
-    RoomID = State#state.room_id,
+    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
 
-    Url = "http://vmapi:5000/sites/"
-            ++ binary:bin_to_list(SiteID)
-            ++ "/conferences/"
-            ++ binary:bin_to_list(RoomID),
-    ContentType = "application/x-www-form-urlencoded",
+    case string:equal(Host, MucHost) of
+    true ->
+        % TODO: check if the room name start with __jicofo-health-check
+        [_ , SiteID | _] = string:split(Host, ".", all),
+        RoomID = State#state.room_id,
 
-    httpc:request(delete, {Url, [], ContentType, []}, [], []).
+        Url = "http://vmapi:5000/sites/"
+                ++ binary:bin_to_list(SiteID)
+                ++ "/conferences/"
+                ++ binary:bin_to_list(RoomID),
+        ContentType = "application/x-www-form-urlencoded",
+
+        httpc:request(delete, {Url, [], ContentType, []}, [], []);
+    _ ->
+        ok
+    end.
+
 
 depends(_Host, _Opts) ->
-    [].
+    [{mod_muc, hard}].
 
 mod_options(_Host) ->
-    [].
+    [{ muc_host, <<"">> }].
+
+mod_opt_type(muc_host) ->
+    econf:string().
 
 mod_doc() ->
     #{desc =>
