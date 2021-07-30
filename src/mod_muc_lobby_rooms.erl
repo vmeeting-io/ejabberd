@@ -193,7 +193,7 @@ on_kick_participant(Ujid, Jid, State) ->
 
 % destroys lobby room for the supplied main room
 destroy_lobby_room(LobbyRoom, NewJid) ->
-    destroy_lobby_room(LobbyRoom, NewJid, <<"Lobby room closed.">>).
+    destroy_lobby_room(LobbyRoom, NewJid, <<"destroyed_by_host">>).
 destroy_lobby_room(LobbyRoom, NewJid, Message) when Message == <<>>; Message == undefined ->
     destroy_lobby_room(LobbyRoom, NewJid);
 destroy_lobby_room(LobbyRoom, NewJid, Message) ->
