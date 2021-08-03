@@ -112,7 +112,11 @@ process(LocalPath, Request) ->
 
 process_notice(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
-    Room = maps:get(<<"room_name">>, DataJSON),
+    {match, [SiteID, RoomName]} = re:run(maps:get(<<"room_name">>, DataJSON),
+                                        "\\[(?<site>\\w+)\\](?<room>.+)",
+                                        [{capture, [site, room], binary}]),
+    RoomNameEnc = vm_util:percent_encode(RoomName),
+    Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
     RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
     mod_muc_room:service_notice(RoomPID, maps:get(<<"notice">>, DataJSON)),
@@ -120,7 +124,11 @@ process_notice(Data) ->
 
 process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
-    Room = maps:get(<<"room_name">>, DataJSON),
+    {match, [SiteID, RoomName]} = re:run(maps:get(<<"room_name">>, DataJSON),
+                                        "\\[(?<site>\\w+)\\](?<room>.+)",
+                                        [{capture, [site, room], binary}]),
+    RoomNameEnc = vm_util:percent_encode(RoomName),
+    Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
     ?INFO_MSG("process_event: ~ts ~ts", [Room, MucDomain]),
     RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
