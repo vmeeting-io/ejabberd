@@ -71,24 +71,30 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         ContentType = "application/json",
         ReqBody = jiffy:encode(Body),
 
-        case httpc:request(post, {Url, [], ContentType, ReqBody}, [], []) of
-        {ok, {{_, 201, _} , _Header, Rep}} ->
-            RepJSON = jiffy:decode(Rep, [return_maps]),
-            UserID = maps:get(<<"_id">>, RepJSON),
+        ReceiverFunc = fun(ReplyInfo) ->
+            case ReplyInfo of
+            {_, {{_, 201, _} , _Header, Rep}} ->
+                RepJSON = jiffy:decode(Rep, [return_maps]),
+                UserID = maps:get(<<"_id">>, RepJSON),
 
-            LJID = jid:tolower(JID),
-            VMUser = #{id => UserID,
-                    name => Name,
-                    % email => Email
-                    email => nil
-                },
+                LJID = jid:tolower(JID),
+                VMUser = #{id => UserID,
+                        name => Name,
+                        % email => Email
+                        email => nil
+                    },
 
-            ets:insert(vm_users, {LJID, VMUser});
+                ets:insert(vm_users, {LJID, VMUser});
 
-        {_, _Rep} -> ok
-        end;
+            _ ->
+                ?WARNING_MSG("[~p] ~p: recv http reply ~p~n", [?MODULE, ?FUNCTION_NAME, ReplyInfo])
+            end
+        end,
+        httpc:request(post, {Url, [], ContentType, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]);
+
     _ -> ok
     end,
+
     State.
 
 on_leave_room(_ServerHost, _Room, _Host, JID) ->
@@ -98,7 +104,7 @@ on_leave_room(_ServerHost, _Room, _Host, JID) ->
     [{LJID, VMUser}] ->
         VMUserID = maps:get(id, VMUser),
         Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
-        httpc:request(delete, {Url, [], [], []}, [], []),
+        httpc:request(delete, {Url, [], [], []}, [], [{sync, false}]),
 
         ets:delete(vm_users, LJID);
     _ -> ok
@@ -126,7 +132,7 @@ on_broadcast_presence(_ServerHost,
                 Body = #{name => Name},
                 ReqBody = jiffy:encode(Body),
 
-                httpc:request(patch, {Url, [], ContentType, ReqBody}, [], []);
+                httpc:request(patch, {Url, [], ContentType, ReqBody}, [], [{sync, false}]);
 
             true -> ok
             end;
@@ -179,7 +185,7 @@ on_room_destroyed(State, _ServerHost, _Room, Host) ->
                 ++ binary:bin_to_list(RoomID),
         ContentType = "application/x-www-form-urlencoded",
 
-        httpc:request(delete, {Url, [], ContentType, []}, [], []);
+        httpc:request(delete, {Url, [], ContentType, []}, [], [{sync, false}]);
     _ ->
         ok
     end.
