@@ -16,7 +16,7 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1,
-    on_start_room/4, on_room_destroyed/4, on_pre_join_room/5, on_leave_room/5,
+    on_start_room/4, on_room_destroyed/4, on_pre_join_room/5,
     on_muc_invite/5, on_change_state/3, disco_local_identity/5,on_kick_participant/3,
     mod_doc/0]).
 
@@ -26,7 +26,6 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 50),
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:add(vm_pre_join_room, Host, ?MODULE, on_pre_join_room, 100),
-    ejabberd_hooks:add(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:add(vm_change_state, Host, ?MODULE, on_change_state, 100),
     ejabberd_hooks:add(vm_muc_invite, Host, ?MODULE, on_muc_invite, 100),
     ok.
@@ -37,7 +36,6 @@ stop(Host) ->
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 50),
     ejabberd_hooks:delete(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:delete(vm_pre_join_room, Host, ?MODULE, on_pre_join_room, 100),
-    ejabberd_hooks:delete(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:delete(vm_change_state, Host, ?MODULE, on_change_state, 100),
     ejabberd_hooks:delete(vm_muc_invite, Host, ?MODULE, on_muc_invite, 100),
     ok.
@@ -149,9 +147,6 @@ on_pre_join_room(#state{room = RoomName, config = Config} = State,
         State
     end;
 on_pre_join_room(State, _ServerHost, _Packet, _FromJid, _Nick) ->
-    State.
-
-on_leave_room(State, _ServerHost, Room, Host, JID) ->
     State.
 
 on_muc_invite(State, From, To, Reason, Pkt) ->

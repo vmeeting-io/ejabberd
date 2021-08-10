@@ -10,7 +10,7 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, on_join_room/6,
-    on_broadcast_presence/3, on_leave_room/5, on_start_room/4,
+    on_broadcast_presence/3, on_leave_room/4, on_start_room/4,
     on_room_destroyed/4, mod_doc/0]).
 
 start(Host, _Opts) ->
@@ -22,14 +22,14 @@ start(Host, _Opts) ->
     end,
 
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
-    ejabberd_hooks:add(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
+    ejabberd_hooks:add(leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:add(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 stop(Host) ->
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
-    ejabberd_hooks:delete(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
+    ejabberd_hooks:delete(leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:delete(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
@@ -37,7 +37,7 @@ stop(Host) ->
 on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
     % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [Packet#presence.to#jid.server, MucHost]),
-    
+
     User = JID#jid.user,
 
     case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
@@ -91,7 +91,7 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     end,
     State.
 
-on_leave_room(State, _ServerHost, _Room, _Host, JID) ->
+on_leave_room(_ServerHost, _Room, _Host, JID) ->
     LJID = jid:tolower(JID),
 
     case ets:lookup(vm_users, LJID) of
@@ -102,8 +102,7 @@ on_leave_room(State, _ServerHost, _Room, _Host, JID) ->
 
         ets:delete(vm_users, LJID);
     _ -> ok
-    end,
-    State.
+    end.
 
 on_broadcast_presence(_ServerHost,
                         #presence{to = To, type = PresenceType, sub_els = SubEls},
