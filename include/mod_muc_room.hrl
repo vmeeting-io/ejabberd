@@ -141,7 +141,6 @@
 
 -record(room_data,
 {
-    start_time = -1 :: integer(),
     max_durations = -1 :: integer(),
     created_timestamp = 0 :: non_neg_integer()
 }).

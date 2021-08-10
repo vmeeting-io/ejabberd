@@ -13,7 +13,7 @@
 -include("ejabberd_http.hrl").
 
 %% gen_mod API callbacks
--export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, process/2,
+-export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, process/2, destroy_room/2,
         on_start_room/3, on_room_destroyed/4, on_vm_pre_disco_info/1, mod_doc/0]).
 
 start(Host, _Opts) ->
@@ -65,9 +65,8 @@ xmpp_domain(Host) ->
 
 
 on_start_room(_ServerHost, Room, Host) ->
-    StartTime = erlang:system_time(second),
     CreatedTimeStamp = erlang:system_time(millisecond),
-    RoomData = #room_data{start_time = StartTime, created_timestamp = CreatedTimeStamp},
+    RoomData = #room_data{created_timestamp = CreatedTimeStamp},
     ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, RoomData]),
     ets:insert(vm_room_data, {Room, RoomData}),
     ok.
@@ -81,8 +80,8 @@ on_room_destroyed(State, _ServerHost, Room, Host) ->
 
 on_vm_pre_disco_info(#state{room = Room, host = Host} = StateData) ->
     case ets:lookup(vm_room_data, Room) of
-    [{Room, #room_data{start_time = StartTime, max_durations = MaxDurations}}] ->
-        TimeElapsed = erlang:system_time(second) - StartTime,
+    [{Room, #room_data{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp}}] ->
+        TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
         TimeRemained = MaxDurations - TimeElapsed,
         Config = StateData#state.config#config{time_remained = TimeRemained},
         StateData1 = StateData#state{config = Config},
@@ -148,12 +147,17 @@ process_event(Data) ->
         {ok, MaxDuration} when MaxDuration > 0 ->
             case mod_muc_room:get_config(RoomPID) of
                 {ok, RoomConfig} when RoomConfig#config.time_remained < 0 ->
-                    destroy_room_after_secs(RoomPID, <<"duration_expired">>, MaxDuration),
-                    mod_muc_admin:change_room_option(RoomPID, time_remained, MaxDuration),
-
                     [{_, RoomData}] = ets:lookup(vm_room_data, Room),
+                    CreatedTimeStamp = RoomData#room_data.created_timestamp,
+
+                    TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
+                    TimeRemained = MaxDuration - TimeElapsed,
+
+                    mod_muc_admin:change_room_option(RoomPID, time_remained, TimeRemained),
                     RoomData1 = RoomData#room_data{max_durations = MaxDuration},
-                    ets:insert(vm_room_data, {Room, RoomData1});
+                    ets:insert(vm_room_data, {Room, RoomData1}),
+
+                    destroy_room_after_secs(RoomPID, <<"duration_expired">>, TimeRemained);
 
                 _ ->
                     ok
@@ -182,8 +186,7 @@ destroy_room(RoomPID, Message) ->
     ?INFO_MSG("destroy_room success: ~p", [RoomPID]).
 
 destroy_room_after_secs(RoomPID, Message, After) ->
-    Mes = binary:list_to_bin(io_lib:format(Message, [])),
-    timer:apply_after(After * 1000, mod_site_license, destroy_room, [RoomPID, Mes]).
+    timer:apply_after(After * 1000, mod_site_license, destroy_room, [RoomPID, Message]).
 
 
 split_room_and_host(Room) ->
