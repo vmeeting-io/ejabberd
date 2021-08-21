@@ -9,7 +9,7 @@
 -include("vmeeting_common.hrl").
 
 %% gen_mod API callbacks
--export([start/2, stop/1, depends/2, mod_options/1, on_join_room/4,
+-export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
     disco_local_identity/5, mod_doc/0]).
 
 start(Host, _Opts) ->
@@ -20,14 +20,14 @@ start(Host, _Opts) ->
     end,
 
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
-    ejabberd_hooks:add(join_room, Host, ?MODULE, on_join_room, 100).
+    ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100).
 
 stop(Host) ->
     ?INFO_MSG("conference_duration stoped ~n", []),
     ejabberd_hooks:delete(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
-    ejabberd_hooks:delete(join_room, Host, ?MODULE, on_join_room, 100).
+    ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100).
 
-on_join_room(_ServerHost, Room, Host, JID) ->
+on_join_room(State, ServerHost, _Packet, JID, _Room, _Nick) ->
     User = JID#jid.user,
 
     % <message
@@ -42,27 +42,21 @@ on_join_room(_ServerHost, Room, Host, JID) ->
     %   </json-message>
     % </message>
 
-    ?INFO_MSG("conference_duration:on_join_room ~p ~ts", [{Room, Host}, jid:encode(JID)]),
-
     case lists:member(User, ?WHITE_LIST_USERS) of
     true -> ok;
     false ->
-        case ets:lookup(vm_room_data, Room) of
-        [{Room, #room_data{created_timestamp = CreatedTimeStamp}}] ->
-            ?INFO_MSG("send message to=~ts, created_timestamp=~b", [jid:encode(JID), CreatedTimeStamp]),
-            JsonMessage = #{type => conference_duration,
-                created_timestamp => CreatedTimeStamp},
-            Msg = #message{
-                from = jid:make(<<"conferenceduration.", _ServerHost/binary>>),
-                to = JID,
-                sub_els = [#json_message{data = jiffy:encode(JsonMessage)}]
-            },
-            ejabberd_router:route(Msg);
-        _ ->
-            ?INFO_MSG("look up not found ~ts", [Room]),
-            ok
-        end
-    end.
+        #state{jid = RoomJid, created_timestamp = CreatedTimeStamp} = State,
+        ?INFO_MSG("conference_duration:on_join_room ~ts ~ts ~b", [jid:encode(RoomJid), jid:encode(JID), CreatedTimeStamp]),
+        JsonMessage = #{type => conference_duration,
+            created_timestamp => CreatedTimeStamp},
+        Msg = #message{
+            from = jid:make(<<"conferenceduration.", ServerHost/binary>>),
+            to = JID,
+            sub_els = [#json_message{data = jiffy:encode(JsonMessage)}]
+        },
+        ejabberd_router:route(Msg)
+    end,
+    State.
 
 depends(_Host, _Opts) ->
     [].

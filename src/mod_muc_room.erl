@@ -1036,6 +1036,20 @@ process_groupchat_message(#message{from = From, lang = Lang} = Packet, StateData
 					      end,
 		 case IsAllowed of
 		   true ->
+			   SendWrappedMultiple = fun(NP, NS) ->
+			     Node = if Subject == [] -> ?NS_MUCSUB_NODES_MESSAGES;
+				       true -> ?NS_MUCSUB_NODES_SUBJECT
+				    end,
+			     send_wrapped_multiple(
+			       jid:replace_resource(StateData#state.jid, FromNick),
+			       get_users_and_subscribers(StateData),
+			       NP, Node, NS),
+			     NewStateData2 = case has_body_or_subject(NP) of
+					       true -> add_message_to_history(FromNick, From, NP, NS);
+					       false -> NS
+					     end,
+			     {next_state, normal_state, NewStateData2}
+			   end,
 		       case
 			 ejabberd_hooks:run_fold(muc_filter_message,
 						 StateData#state.server_host,
@@ -1044,23 +1058,12 @@ process_groupchat_message(#message{from = From, lang = Lang} = Packet, StateData
 			   of
 			 drop ->
 			     {next_state, normal_state, StateData};
-			 NewPacket ->
-			     Node = if Subject == [] -> ?NS_MUCSUB_NODES_MESSAGES;
-				       true -> ?NS_MUCSUB_NODES_SUBJECT
-				    end,
-			     send_wrapped_multiple(
-			       jid:replace_resource(StateData#state.jid, FromNick),
-			       get_users_and_subscribers(StateData),
-			       NewPacket, Node, NewStateData1),
-			     NewStateData2 = case has_body_or_subject(NewPacket) of
-					       true ->
-						   add_message_to_history(FromNick, From,
-									  NewPacket,
-									  NewStateData1);
-					       false ->
-						   NewStateData1
-					     end,
-			     {next_state, normal_state, NewStateData2}
+			 {drop, NewState} ->
+				 {next_state, normal_state, NewState};
+			 {pass, NewState} ->
+				 SendWrappedMultiple(Packet, NewState);
+ 			 NewPacket ->
+				 SendWrappedMultiple(NewPacket, NewStateData1)
 		       end;
 		   _ ->
 		       Err = case (StateData#state.config)#config.allow_change_subj of
@@ -1541,16 +1544,16 @@ expulse_participant(Packet, From, StateData, Reason1) ->
     end,
     remove_online_user(From, NewState).
 
--spec get_owners(state()) -> [jid:jid()].
-get_owners(StateData) ->
-    maps:fold(
-       fun(LJID, owner, Acc) ->
-	       [jid:make(LJID)|Acc];
-	  (LJID, {owner, _}, Acc) ->
-	       [jid:make(LJID)|Acc];
-	  (_, _, Acc) ->
-	       Acc
-       end, [], StateData#state.affiliations).
+% -spec get_owners(state()) -> [jid:jid()].
+% get_owners(StateData) ->
+%     maps:fold(
+%        fun(LJID, owner, Acc) ->
+% 	       [jid:make(LJID)|Acc];
+% 	  (LJID, {owner, _}, Acc) ->
+% 	       [jid:make(LJID)|Acc];
+% 	  (_, _, Acc) ->
+% 	       Acc
+%        end, [], StateData#state.affiliations).
 
 -spec set_affiliation(jid(), affiliation(), state()) -> state().
 set_affiliation(JID, Affiliation, StateData) ->

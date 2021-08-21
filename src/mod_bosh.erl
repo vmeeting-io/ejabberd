@@ -66,7 +66,7 @@ process([], #request{method = 'POST', data = <<>>}) ->
      #xmlel{name = <<"h1">>, attrs = [],
 	    children = [{xmlcdata, <<"400 Bad Request">>}]}};
 process([],
-	#request{method = 'POST', data = Data, ip = IP, q = Query, headers = Hdrs} = Request) ->
+	#request{method = 'POST', data = Data, ip = IP, q = Query, headers = Hdrs}) ->
     ?DEBUG("Incoming data: ~p", [Data]),
     Type = get_type(Hdrs),
     ejabberd_bosh:process_request({Query, Data}, IP, Type);

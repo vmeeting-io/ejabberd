@@ -115,7 +115,7 @@ room_jid_match_rewrite(RoomJid) ->
     room_jid_match_rewrite(RoomJid, undefined).
 
 -spec room_jid_match_rewrite(undefined | jid(), stanza()) -> undefined | jid().
-room_jid_match_rewrite(RoomJid, Stanza) when RoomJid == undefined ->
+room_jid_match_rewrite(RoomJid, _Stanza) when RoomJid == undefined ->
     undefined;
 room_jid_match_rewrite(RoomJid, Stanza) ->
     {N, H, R, S} = room_jid_split_subdomain(RoomJid),
@@ -152,7 +152,7 @@ extract_subdomain(Room) ->
 
 % Utility function to check and convert a room JID from real [foo]room1@muc.example.com to virtual room1@muc.foo.example.com
 -spec internal_room_jid_match_rewrite(undefined | jid(), stanza()) -> undefined | jid().
-internal_room_jid_match_rewrite(RoomJid, Stanza) when RoomJid == undefined ->
+internal_room_jid_match_rewrite(RoomJid, _Stanza) when RoomJid == undefined ->
     undefined;
 internal_room_jid_match_rewrite(RoomJid, Stanza) ->
     {N, H, R} = jid:split(RoomJid),

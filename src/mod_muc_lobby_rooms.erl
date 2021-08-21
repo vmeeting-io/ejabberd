@@ -59,7 +59,7 @@ whitelist_domains(Opts) when is_map(Opts) ->
 whitelist_domains(Host) ->
     gen_mod:get_module_opt(Host, mod_muc_lobby_rooms, whitelist_domains).
 
-on_start_room(State, ServerHost, Room, Host) ->
+on_start_room(State, ServerHost, Room, _Host) ->
     case State#state.config#config.members_only of
     true ->
         LobbyRoom = <<Room/binary, "@", "lobby.", ServerHost/binary>>,
@@ -68,7 +68,7 @@ on_start_room(State, ServerHost, Room, Host) ->
         State
     end.
 
-on_room_destroyed(State, _ServerHost, Room, Host) ->
+on_room_destroyed(State, _ServerHost, _Room, _Host) ->
     case State#state.lobbyroom of
     <<>> ->
         ok;
@@ -79,7 +79,7 @@ on_room_destroyed(State, _ServerHost, Room, Host) ->
 on_change_state(State, FromJid, Options) ->
     case lists:keyfind(membersonly, 1, Options) of
     {_, Value} ->
-        #state{room = Room, jid = RoomJid, server_host = ServerHost} = State,
+        #state{room = Room, server_host = ServerHost} = State,
         LobbyRoom = <<Room/binary, "@", "lobby.", ServerHost/binary>>,
         LobbyHost = <<"lobby.", ServerHost/binary>>,
         {ok, Inviter} = maps:find(jid:tolower(FromJid), State#state.users),
@@ -120,7 +120,7 @@ disco_local_identity(Acc, _From, _To, _Node, _Lang) ->
 
 % Create muc_lobby_rooms object for the joined user
 on_pre_join_room(#state{room = RoomName, config = Config} = State,
-        _ServerHost, #presence{sub_els = SubEls} = Packet, FromJid, Nick) ->
+        _ServerHost, Packet, FromJid, _Nick) ->
     MucSubTag = xmpp:get_subtag(Packet, #muc{}),
     IsJoin = MucSubTag /= false,
     IsHeathcheck = vm_util:is_healthcheck_room(RoomName),
@@ -149,7 +149,7 @@ on_pre_join_room(#state{room = RoomName, config = Config} = State,
 on_pre_join_room(State, _ServerHost, _Packet, _FromJid, _Nick) ->
     State.
 
-on_muc_invite(State, From, To, Reason, Pkt) ->
+on_muc_invite(State, From, To, _Reason, _Pkt) ->
     Room = State#state.room,
     ServerHost = State#state.server_host,
     LobbyHost = <<"lobby.", ServerHost/binary>>,
@@ -191,7 +191,7 @@ destroy_lobby_room(LobbyRoom, NewJid) ->
     destroy_lobby_room(LobbyRoom, NewJid, <<"destroyed_by_host">>).
 destroy_lobby_room(LobbyRoom, NewJid, Message) when Message == <<>>; Message == undefined ->
     destroy_lobby_room(LobbyRoom, NewJid);
-destroy_lobby_room(LobbyRoom, NewJid, Message) ->
+destroy_lobby_room(LobbyRoom, _NewJid, Message) ->
     ?INFO_MSG("mod_muc_lobby_rooms:destroy_lobby_room '~ts'", [LobbyRoom]),
     case LobbyRoom of
     <<>> -> ok;
@@ -199,7 +199,7 @@ destroy_lobby_room(LobbyRoom, NewJid, Message) ->
         RoomPID = case string:split(LobbyRoom, "@") of
         [Room, Domain] ->
             mod_muc_admin:get_room_pid(Room, Domain);
-        [Room] ->
+        [_] ->
             invalid_service;
         _ ->
             room_not_found

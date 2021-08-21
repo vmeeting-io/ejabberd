@@ -100,6 +100,19 @@
     presence :: {binary(), presence()} | undefined
 }).
 
+-record(answer, {
+    name = <<"">> :: binary(),
+    voters = #{} :: map()
+}).
+
+-record(poll, {
+    id = <<"">> :: binary(),
+    senderId = <<"">> :: binary(),
+    senderName = <<"">> :: binary(),
+    question = <<"">> :: binary(),
+    answers = [] :: [#answer{}]
+}).
+
 -record(state,
 {
     room                    = <<"">> :: binary(),
@@ -129,7 +142,14 @@
     lobbyroom               = <<"">> :: binary(),
     % internal state that should be get/set directly from state value
     % i.e., get/set via intermediate functions are not implemented yet
-    main_room_pid           = none :: pid() | none
+    main_room_pid           = none :: pid() | none,
+    max_durations           = -1 :: integer(),
+    created_timestamp       = 0 :: non_neg_integer(),
+    polls                   = [] :: [#poll{}],
+    is_close_all_scheduled  = false :: boolean(),
+    is_broadcast_breakout_scheduled = false :: boolean(),
+    breakout_rooms          = #{} :: #{binary() => #{}},
+    next_index              = 0 :: non_neg_integer()
 }).
 
 -type users() :: #{ljid() => #user{}}.
@@ -138,9 +158,3 @@
 -type affiliations() :: #{ljid() => affiliation() | {affiliation(), binary()}}.
 -type subscribers() :: #{ljid() => #subscriber{}}.
 -type subscriber_nicks() :: #{binary() => [ljid()]}.
-
--record(room_data,
-{
-    max_durations = -1 :: integer(),
-    created_timestamp = 0 :: non_neg_integer()
-}).

@@ -14,24 +14,15 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, process/2, destroy_room/2,
-        on_start_room/3, on_room_destroyed/4, on_vm_pre_disco_info/1, mod_doc/0]).
+        on_start_room/4, on_vm_pre_disco_info/1, mod_doc/0]).
 
 start(Host, _Opts) ->
-    % This could run multiple times on different server host,
-    % so need to wrap in try-catch, otherwise will get badarg error
-    try ets:new(vm_room_data, [named_table, public])
-    catch
-        _:badarg -> ok
-    end,
-
-    ejabberd_hooks:add(start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
+    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:add(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
 stop(Host) ->
-    ejabberd_hooks:delete(start_room, Host, ?MODULE, on_start_room, 100),
-    ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
+    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:delete(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
@@ -64,33 +55,18 @@ xmpp_domain(Host) ->
     gen_mod:get_module_opt(Host, ?MODULE, xmpp_domain).
 
 
-on_start_room(_ServerHost, Room, Host) ->
+on_start_room(State, _ServerHost, Room, Host) ->
     CreatedTimeStamp = erlang:system_time(millisecond),
-    RoomData = #room_data{created_timestamp = CreatedTimeStamp},
-    ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, RoomData]),
-    ets:insert(vm_room_data, {Room, RoomData}),
-    ok.
+    State1 = State#state{created_timestamp = CreatedTimeStamp},
+    ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, CreatedTimeStamp]),
+    State1.
 
-on_room_destroyed(State, _ServerHost, Room, Host) ->
-    ?INFO_MSG("mod_site_license on_room_destroyed ~p", [Room]),
-    try ets:delete(vm_room_data, Room)
-    catch
-        _:badarg -> ok
-    end.
-
-on_vm_pre_disco_info(#state{room = Room, host = Host} = StateData) ->
-    case ets:lookup(vm_room_data, Room) of
-    [{Room, #room_data{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp}}] ->
-        TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
-        TimeRemained = MaxDurations - TimeElapsed,
-        Config = StateData#state.config#config{time_remained = TimeRemained},
-        StateData1 = StateData#state{config = Config},
-        StateData1;
-    _ ->
-        StateData
-    end;
-on_vm_pre_disco_info(StateData) ->
-    StateData.
+on_vm_pre_disco_info(#state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = StateData) ->
+    TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
+    TimeRemained = MaxDurations - TimeElapsed,
+    Config = StateData#state.config#config{time_remained = TimeRemained},
+    StateData1 = StateData#state{config = Config},
+    StateData1.
 
 
 process(LocalPath, Request) ->
@@ -129,8 +105,8 @@ process_event(Data) ->
     RoomNameEnc = vm_util:percent_encode(RoomName),
     Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
-    ?INFO_MSG("process_event: ~ts ~ts", [Room, MucDomain]),
     RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
+    ?INFO_MSG("process_event: ~ts ~ts ~p", [Room, MucDomain, RoomPID]),
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} ->
@@ -145,20 +121,18 @@ process_event(Data) ->
 
         case maps:find(<<"max_durations">>, DataJSON) of
         {ok, MaxDuration} when MaxDuration > 0 ->
-            case mod_muc_room:get_config(RoomPID) of
-                {ok, RoomConfig} when RoomConfig#config.time_remained < 0 ->
-                    [{_, RoomData}] = ets:lookup(vm_room_data, Room),
-                    CreatedTimeStamp = RoomData#room_data.created_timestamp,
+            case vm_util:get_room_state(Room, MucDomain) of
+                {ok, State} when State#state.config#config.time_remained < 0 ->
+                    CreatedTimeStamp = State#state.created_timestamp,
 
                     TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
                     TimeRemained = MaxDuration - TimeElapsed,
 
                     mod_muc_admin:change_room_option(RoomPID, time_remained, TimeRemained),
-                    RoomData1 = RoomData#room_data{max_durations = MaxDuration},
-                    ets:insert(vm_room_data, {Room, RoomData1}),
+                    State1 = State#state{max_durations = MaxDuration},
+                    vm_util:set_room_state(Room, MucDomain, State1),
 
                     destroy_room_after_secs(RoomPID, <<"duration_expired">>, TimeRemained);
-
                 _ ->
                     ok
             end;
@@ -176,7 +150,7 @@ process_event(Data) ->
 
     {200, [], []}.
 
-destroy_room(RoomPID, Message)
+destroy_room(RoomPID, _Message)
     when RoomPID == room_not_found; RoomPID == invalid_service ->
     ?INFO_MSG("destroy_room ERROR: ~p", [RoomPID]),
     ok;
@@ -190,7 +164,7 @@ destroy_room_after_secs(RoomPID, Message, After) ->
 
 
 split_room_and_host(Room) ->
-    {match, [SiteID, RoomName]} = re:run(Room,
+    {match, [_SiteID, RoomName]} = re:run(Room,
                                         "\\[(?<site>\\w+)\\](?<room>.+)",
                                         [{capture, [site, room], binary}]),
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),

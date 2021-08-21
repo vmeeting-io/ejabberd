@@ -12,7 +12,6 @@
                           dominantSpeakerStart = 0 :: non_neg_integer(),
                           nick = <<>> :: binary(),
                           totalDominantSpeakerTime = 0 :: non_neg_integer()}).
--type vm_speakerstats() :: #vm_speakerstats{}.
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1,
@@ -115,7 +114,7 @@ setDominantSpeaker(SpeakerStats, Bool, State) ->
     end.
 
 % Create SpeakerStats object for the joined user
-on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
+on_join_room(State, _ServerHost, _Packet, JID, RoomID, Nick) ->
     case vm_util:is_healthcheck_room(RoomID) of
     true -> State;
     false ->
@@ -160,7 +159,7 @@ on_join_room(State, _ServerHost, Packet, JID, RoomID, Nick) ->
 
 % Occupant left set its dominant speaker to false and update the store the
 % display name
-on_leave_room(State, _ServerHost, Room, Host, JID) ->
+on_leave_room(State, _ServerHost, Room, _Host, JID) ->
     case vm_util:is_healthcheck_room(Room) of
     true -> State;
     false ->
