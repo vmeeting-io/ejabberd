@@ -12,6 +12,7 @@
     internal_room_jid_match_rewrite/2,
     extract_subdomain/1,
     get_subtag_value/2,
+    get_subtag_value/3,
     percent_encode/1
 ]).
 
@@ -179,12 +180,15 @@ internal_room_jid_match_rewrite(RoomJid, Stanza) ->
     end.
 
 
-get_subtag_value( [El | Els], Name) ->
+get_subtag_value([El | Els], Name) ->
+    get_subtag_value([El | Els], Name, null).
+
+get_subtag_value([El | Els], Name, Default) ->
     case El of
       #xmlel{name = Name} -> fxml:get_tag_cdata(El);
-      _ -> get_subtag_value(Els, Name)
+      _ -> get_subtag_value(Els, Name, Default)
     end;
-get_subtag_value([], _) -> not_found.
+get_subtag_value([], _, Default) -> Default.
 
 % uri_string did percentage encoding, but encoded hexa are in uppercase, while othe other component
 % encode in lowercase. edoc_lib cannot encode utf8 correctly

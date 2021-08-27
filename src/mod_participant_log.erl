@@ -55,17 +55,19 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         SubEls = Packet#presence.sub_els,
         Name = vm_util:get_subtag_value(SubEls, <<"nick">>),
         StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
+        Email = vm_util:get_subtag_value(SubEls, <<"email">>, null),
 
+        ?INFO_MSG("on_join_room: ~ts ~ts ~ts", [Name, StatsID, Email]),
         Body = #{
-                conference => State#state.room_id,
-                joinTime => JoinTime,
-                leaveTime => nil,
-                name => Name,
-                % email => Email,
-                nick => Nick,
-                jid => jid:encode(JID),
-                stats_id => StatsID
-            },
+            conference => State#state.room_id,
+            joinTime => JoinTime,
+            leaveTime => null,
+            name => Name,
+            email => Email,
+            nick => Nick,
+            jid => jid:encode(JID),
+            stats_id => StatsID
+        },
 
         Url = "http://vmapi:5000/plog/",
         ContentType = "application/json",
@@ -76,13 +78,12 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
             {_, {{_, 201, _} , _Header, Rep}} ->
                 RepJSON = jiffy:decode(Rep, [return_maps]),
                 UserID = maps:get(<<"_id">>, RepJSON),
-
+                Email = maps:get(<<"email">>, RepJSON, null),
                 LJID = jid:tolower(JID),
                 VMUser = #{id => UserID,
-                        name => Name,
-                        % email => Email
-                        email => nil
-                    },
+                    name => Name,
+                    email => Email
+                },
 
                 ets:insert(vm_users, {LJID, VMUser});
 

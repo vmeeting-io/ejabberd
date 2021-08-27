@@ -23,23 +23,23 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_doc/0,
-    process_message/1, check_create_room/4,
+    process_message/3, check_create_room/4,
     on_start_room/4, on_room_destroyed/4, on_join_room/4, on_leave_room/4]).
 
 start(Host, _Opts) ->
-    ejabberd_hooks:add(start_room, Host, ?MODULE, on_start_room, 100),
+    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:add(join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:add(leave_room, Host, ?MODULE, on_leave_room, 100),
-    ejabberd_hooks:add(local_send_to_resource_hook, Host, ?MODULE, process_message, 50),
+    ejabberd_hooks:add(muc_filter_message, Host, ?MODULE, process_message, 50),
     ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
     ejabberd_hooks:add(check_create_room, Host, ?MODULE, check_create_room, 50),
     ok.
 
 stop(Host) ->
-    ejabberd_hooks:delete(start_room, Host, ?MODULE, on_start_room, 100),
+    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:delete(join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:delete(leave_room, Host, ?MODULE, on_leave_room, 100),
-    ejabberd_hooks:delete(local_send_to_resource_hook, Host, ?MODULE, process_message, 50),
+    ejabberd_hooks:delete(muc_filter_message, Host, ?MODULE, process_message, 50),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100),
     ejabberd_hooks:delete(check_create_room, Host, ?MODULE, check_create_room, 50),
     ok.
@@ -211,33 +211,38 @@ destroy_breakout_room(RoomJid) ->
 process_message(#message{
     to = To,
     from = From,
-    type = chat,
-    sub_els = [#json_message{data = Data}]
-}) when is_binary(Data) ->
-	Message = jiffy:decode(Data, [return_maps]),
-    Type = maps:get(<<"type">>, Message),
-    RoomJid = jid:remove_resource(To),
-    MainRoomJid = get_main_room_jid(RoomJid),
+    type = chat
+} = Packet, State, _FromNick) ->
+    case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
+    Data ->
+	    Message = jiffy:decode(Data, [return_maps]),
+        ?INFO_MSG("decoded message: ~p", [Message]),
+        Type = maps:get(<<"type">>, Message),
+        RoomJid = jid:remove_resource(To),
+        MainRoomJid = get_main_room_jid(RoomJid),
 
-    case vm_util:get_state_from_jid(RoomJid) of
-    {ok, State} ->
-        case {mod_muc_room:get_affiliation(From, State), Type} of
-        {owner, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
-            Subject = maps:get(<<"subject">>, Message),
-            NextIndex = maps:get(<<"nextIndex">>, Message),
-            create_breakout_room(MainRoomJid, RoomJid, Subject, NextIndex);
-        {owner, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
-            BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
-            destroy_breakout_room(jid:decode(BreakoutRoomJid));
-        {owner, ?JSON_TYPE_MOVE_TO_ROOM_REQUEST} ->
-            Nick = To#jid.resource,
-            ParticipantRoomJid = jid:from_string(Nick),
-            case vm_util:get_state_from_jid(ParticipantRoomJid) of
-            { ok, ParticipantRoomState } ->
-                Occupant = maps:get(jid:tolower(To), ParticipantRoomState#state.users),
-                send_json_msg(ParticipantRoomState, Occupant#user.jid, Data)
+        case vm_util:get_state_from_jid(RoomJid) of
+        {ok, State} ->
+            case {mod_muc_room:get_affiliation(From, State), Type} of
+            {owner, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
+                Subject = maps:get(<<"subject">>, Message),
+                NextIndex = maps:get(<<"nextIndex">>, Message),
+                create_breakout_room(MainRoomJid, RoomJid, Subject, NextIndex);
+            {owner, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
+                BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
+                destroy_breakout_room(jid:decode(BreakoutRoomJid));
+            {owner, ?JSON_TYPE_MOVE_TO_ROOM_REQUEST} ->
+                Nick = To#jid.resource,
+                ParticipantRoomJid = jid:from_string(Nick),
+                case vm_util:get_state_from_jid(ParticipantRoomJid) of
+                { ok, ParticipantRoomState } ->
+                    Occupant = maps:get(jid:tolower(To), ParticipantRoomState#state.users),
+                    send_json_msg(ParticipantRoomState, Occupant#user.jid, Data)
+                end
             end
-        end
+        end;
+    _ ->
+        Packet
     end.
 
 -spec check_create_room(boolean(), binary(), binary(), binary()) -> boolean().
