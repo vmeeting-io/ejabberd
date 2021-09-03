@@ -6,6 +6,7 @@
     get_room_pid_from_jid/1,
     get_room_state/2,
     set_room_state/3,
+    set_room_state_from_jid/2,
     is_healthcheck_room/1,
     room_jid_match_rewrite/1,
     room_jid_match_rewrite/2,
@@ -13,7 +14,8 @@
     extract_subdomain/1,
     get_subtag_value/2,
     get_subtag_value/3,
-    percent_encode/1
+    percent_encode/1,
+    split_room_and_site/1
 ]).
 
 -include_lib("xmpp/include/xmpp.hrl").
@@ -36,12 +38,17 @@ is_healthcheck_room(Room) ->
 
 -spec get_room_state(binary(), binary()) -> {ok, mod_muc_room:state()} | error.
 get_room_state(RoomName, MucService) ->
-    #jid{luser = R1, lserver = H1} = room_jid_match_rewrite(jid:make(RoomName, MucService)),
-    case mod_muc:find_online_room(R1, H1) of
-	{ok, RoomPid} ->
-	    get_room_state(RoomPid);
-	error ->
-	    error
+    case room_jid_match_rewrite(jid:make(RoomName, MucService)) of
+    #jid{luser = R1, lserver = H1} ->
+        case mod_muc:find_online_room(R1, H1) of
+        {ok, RoomPid} ->
+            get_room_state(RoomPid);
+        error ->
+            ?INFO_MSG("get_room_state: ~ts@~ts ERROR", [RoomName, MucService]),
+            error
+        end;
+    _ ->
+        error
     end.
 
 -spec get_room_state(pid()) -> {ok, mod_muc_room:state()} | error.
@@ -49,18 +56,22 @@ get_room_state(RoomPid) ->
     case mod_muc_room:get_state(RoomPid) of
     {ok, State} ->
         {ok, State};
-    {error, _} ->
+    _ ->
         error
     end.
 
 -spec set_room_state(binary(), binary(), mod_muc_room:state()) -> {ok, mod_muc_room:state()} | {error, notfound | timeout}.
 set_room_state(RoomName, MucService, State) ->
-    #jid{luser = R1, lserver = H1} = room_jid_match_rewrite(jid:make(RoomName, MucService)),
-    case mod_muc:find_online_room(R1, H1) of
-	{ok, RoomPid} ->
-	    set_room_state(RoomPid, State);
-	error ->
-	    error
+    case room_jid_match_rewrite(jid:make(RoomName, MucService)) of
+    #jid{luser = R1, lserver = H1} ->
+        case mod_muc:find_online_room(R1, H1) of
+        {ok, RoomPid} ->
+            set_room_state(RoomPid, State);
+        error ->
+            error
+        end;
+    _ ->
+        error
     end.
 
 -spec set_room_state(pid(), mod_muc_room:state()) -> {ok, mod_muc_room:state()} | {error, notfound | timeout}.
@@ -85,22 +96,44 @@ get_room_pid_from_jid(RoomJid) ->
     { Room, Host, _ } = jid:split(RoomJid),
     mod_muc_admin:get_room_pid(Room, Host).
 
+-spec set_room_state_from_jid(jid(), mod_muc_room:state()) -> {ok, mod_muc_room:state()} | error.
+set_room_state_from_jid(RoomJid, State) ->
+    case get_room_pid_from_jid(RoomJid) of
+    RoomPid when RoomPid /= room_not_found, RoomPid /= invalid_service ->
+        set_room_state(RoomPid, State);
+    _ ->
+        error
+    end.
+
+-spec set_room_config_from_jid(jid(), mod_muc_room:config()) -> {ok, mod_muc_room:config()} | {error, notfound | timeout}.
+set_room_config_from_jid(RoomJid, Config) ->
+    case get_room_pid_from_jid(RoomJid) of
+    RoomPid when RoomPid /= room_not_found, RoomPid /= invalid_service ->
+        mod_muc_room:set_config(RoomPid, Config);
+    _ ->
+        error
+    end.
+
 % Utility function to split room JID to include room name and subdomain
 % (e.g. from room1@conference.foo.example.com/res returns (room1, example.com, res, foo))
 room_jid_split_subdomain(RoomJid) ->
-    { N, H, R } = jid:split(RoomJid),
-    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
-    [Prefix, Base] = string:split(MucDomain, "."),
-    case (H == MucDomain) or (string:find(H, Prefix) /= H) of
-    true -> {N, H, R, <<>>};
-    false ->
-        {ok, RE} = re:compile(<<"^", Prefix/binary, "\.([^.]+)\.", Base/binary, "$">>),
-        case re:run(H, RE, [{capture, [1], binary}]) of
-        nomatch -> {N, H, R, <<>>};
-        {match, [Subdomain]} ->
-            % ?INFO_MSG("room_jid_split_subdomain ~p", [{N, H, R, Subdomain}]),
-            {N, H, R, Subdomain}
-        end
+    case jid:split(RoomJid) of
+    { N, H, R } ->
+        MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
+        [Prefix, Base] = string:split(MucDomain, "."),
+        case (H == MucDomain) or (string:find(H, Prefix) /= H) of
+        true -> {N, H, R, <<>>};
+        false ->
+            {ok, RE} = re:compile(<<"^", Prefix/binary, "\.([^.]+)\.", Base/binary, "$">>),
+            case re:run(H, RE, [{capture, [1], binary}]) of
+            nomatch -> {N, H, R, <<>>};
+            {match, [Subdomain]} ->
+                % ?INFO_MSG("room_jid_split_subdomain ~p", [{N, H, R, Subdomain}]),
+                {N, H, R, Subdomain}
+            end
+        end;
+    _ ->
+        error
     end.
 
 % Utility function to check and convert a room JID from
@@ -119,25 +152,29 @@ room_jid_match_rewrite(RoomJid) ->
 room_jid_match_rewrite(RoomJid, _Stanza) when RoomJid == undefined ->
     undefined;
 room_jid_match_rewrite(RoomJid, Stanza) ->
-    {N, H, R, S} = room_jid_split_subdomain(RoomJid),
-    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
+    case room_jid_split_subdomain(RoomJid) of
+    {N, H, R, S} ->
+        MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
 
-    jid:make(case {N, H, R, S} of
-    {_, _, _, <<"">>} ->
-        {N, H, R};
-    {<<"">>, _, _, _} ->
-        Result = (Stanza /= undefined) and (xmpp:get_id(Stanza) /= <<>>),
-        if Result ->
-            ets:insert(roomless_iqs, {xmpp:get_id(Stanza), xmpp:get_to(Stanza)});
-        true -> ok
-        end,
-        % ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string({N, MucDomain, R})]),
-        {N, MucDomain, R};
+        jid:make(case {N, H, R, S} of
+        {_, _, _, <<"">>} ->
+            {N, H, R};
+        {<<"">>, _, _, _} ->
+            Result = (Stanza /= undefined) and (xmpp:get_id(Stanza) /= <<>>),
+            if Result ->
+                ets:insert(roomless_iqs, {xmpp:get_id(Stanza), xmpp:get_to(Stanza)});
+            true -> ok
+            end,
+            % ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string({N, MucDomain, R})]),
+            {N, MucDomain, R};
+        _ ->
+            NewJid = {<<"[", S/binary, "]", N/binary>>, MucDomain, R},
+            % ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string(NewJid)]),
+            NewJid
+        end);
     _ ->
-        NewJid = {<<"[", S/binary, "]", N/binary>>, MucDomain, R},
-        % ?INFO_MSG("Rewrote ~ts -> ~ts", [jid:to_string(RoomJid), jid:to_string(NewJid)]),
-        NewJid
-    end).
+        error
+    end.
 
 % Extracts the subdomain and room name from internal jid node [foo]room1
 % @return subdomain(optional, if extracted or nil), the room name
@@ -223,3 +260,13 @@ hex_octet(N) when N > 15 ->
     hex_octet(N bsr 4) ++ hex_octet(N band 15);
 hex_octet(N) ->
     [N - 10 + $a].
+
+split_room_and_site(Room) ->
+    case re:run(Room,
+        "\\[(?<site>\\w+)\\](?<room>.+)",
+        [{capture, [site, room], binary}]) of
+    {match, [SiteID, RoomName]} ->
+        {RoomName, SiteID};
+    _ ->
+        {Room, <<"">>}
+    end.

@@ -1509,11 +1509,11 @@ send_message(Type, From, To, Subject, Body) ->
 
 send_stanza(FromString, ToString, Stanza) ->
     try
-	#xmlel{} = El = fxml_stream:parse_element(Stanza),
-	From = jid:decode(FromString),
-	To = jid:decode(ToString),
-	CodecOpts = ejabberd_config:codec_options(),
-	Pkt = xmpp:decode(El, ?NS_CLIENT, CodecOpts),
+		#xmlel{} = El = fxml_stream:parse_element(Stanza),
+		From = jid:decode(FromString),
+		To = jid:decode(ToString),
+		CodecOpts = ejabberd_config:codec_options(),
+		Pkt = xmpp:decode(El, ?NS_CLIENT, CodecOpts),
         Pkt2 = xmpp:set_from_to(Pkt, From, To),
         State = #{jid => From},
         ejabberd_hooks:run_fold(user_send_packet, From#jid.lserver,

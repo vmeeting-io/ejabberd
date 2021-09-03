@@ -76,11 +76,11 @@ on_join_room(State, _ServerHost, _Packet, JID, _RoomID, _Nick) ->
 % and updating the room poll data accordingly.
 % This mirrors the client-side poll update logic.
 process_message(#message{
-    to = #jid{lresource = <<"">>} = To,
+    to = #jid{lresource = <<"">>},
     type = groupchat
 } = Packet, State, _FromNick) ->
     case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
-    Data ->
+    Data when Data /= null ->
         DecodedData = jiffy:decode(Data, [return_maps]),
         ?INFO_MSG("decoded data: ~p", [DecodedData]),
         case maps:get(<<"type">>, DecodedData) of

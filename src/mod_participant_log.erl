@@ -9,11 +9,12 @@
 -include("vmeeting_common.hrl").
 
 %% gen_mod API callbacks
--export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, on_join_room/6,
+-export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
     on_broadcast_presence/3, on_leave_room/4, on_start_room/4,
     on_room_destroyed/4, mod_doc/0]).
 
 start(Host, _Opts) ->
+    ?INFO_MSG("muc_participant_log:start ~ts", [Host]),
     % This could run multiple times on different server host,
     % so need to wrap in try-catch, otherwise will get badarg error
     try ets:new(vm_users, [named_table, public])
@@ -24,18 +25,18 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:add(leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:add(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
-    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
+    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 stop(Host) ->
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:delete(leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:delete(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
-    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
+    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
-    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [Packet#presence.to#jid.server, MucHost]),
 
     User = JID#jid.user,
@@ -115,7 +116,7 @@ on_broadcast_presence(_ServerHost,
                         #presence{to = To, type = PresenceType, sub_els = SubEls},
                         #jid{user = User} = JID) ->
     IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
-    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
     case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
     {false, available, true} ->
@@ -145,7 +146,8 @@ on_broadcast_presence(_ServerHost,
     end.
 
 on_start_room(State, _ServerHost, Room, Host) ->
-    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
+    ?INFO_MSG("participant_log:on_start_room: ~ts, ~ts", [Room, Host]),
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
     case string:equal(Host, MucHost) of
     true ->
@@ -171,13 +173,14 @@ on_start_room(State, _ServerHost, Room, Host) ->
     _ -> State
     end.
 
-on_room_destroyed(State, _ServerHost, _Room, Host) ->
-    MucHost = gen_mod:get_module_opt(global, mod_participant_log, muc_host),
+on_room_destroyed(State, _ServerHost, Room, Host) ->
+    ?INFO_MSG("participant_log:on_room_destroyed: ~ts, ~ts", [Room, Host]),
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
     case string:equal(Host, MucHost) of
     true ->
         % TODO: check if the room name start with __jicofo-health-check
-        [_ , SiteID | _] = string:split(Host, ".", all),
+        {SiteID, _} = vm_util:extract_subdomain(Room),
         RoomID = State#state.room_id,
 
         Url = "http://vmapi:5000/sites/"
@@ -196,10 +199,7 @@ depends(_Host, _Opts) ->
     [{mod_muc, hard}].
 
 mod_options(_Host) ->
-    [{ muc_host, <<"">> }].
-
-mod_opt_type(muc_host) ->
-    econf:string().
+    [].
 
 mod_doc() ->
     #{desc =>

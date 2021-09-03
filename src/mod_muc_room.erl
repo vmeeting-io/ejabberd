@@ -348,7 +348,8 @@ init([Host, ServerHost, Access, Room, HistorySize,
     add_to_log(room_existence, started, State1),
     ejabberd_hooks:run(start_room, ServerHost, [ServerHost, Room, Host]),
     {ok, normal_state, reset_hibernate_timer(State1)};
-init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, QueueType]) ->
+init([Host, ServerHost, Access, Room, HistorySize,
+	  RoomShaper, Opts, QueueType]) ->
     process_flag(trap_exit, true),
     Shaper = ejabberd_shaper:new(RoomShaper),
     RoomQueue = room_queue_new(ServerHost, Shaper, QueueType),
@@ -360,9 +361,12 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, QueueType])
 				  jid = jid:make(Room, Host),
 				  room_queue = RoomQueue,
 				  room_shaper = Shaper}),
-    add_to_log(room_existence, started, State),
+    State1 = ejabberd_hooks:run_fold(vm_start_room, ServerHost, State, [ServerHost, Room, Host]),
+	store_room(State1),
+    ?INFO_MSG("Started MUC room ~ts@~ts", [Room, Host]),
+    add_to_log(room_existence, started, State1),
     ejabberd_hooks:run(start_room, ServerHost, [ServerHost, Room, Host]),
-    {ok, normal_state, reset_hibernate_timer(State)}.
+    {ok, normal_state, reset_hibernate_timer(State1)}.
 
 normal_state({route, <<"">>,
 	      #message{from = From, type = Type, lang = Lang} = Packet},
