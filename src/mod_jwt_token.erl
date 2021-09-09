@@ -10,6 +10,13 @@
 -include("translate.hrl").
 
 start(Host, _Opts) ->
+    % This could run multiple times on different server host,
+    % so need to wrap in try-catch, otherwise will get badarg error
+    try ets:new(jwt_users, [named_table, public])
+    catch
+        _:badarg -> ok
+    end,
+
     ejabberd_hooks:add(check_jwt_token, Host, ?MODULE, check_jwt_token, 50).
 
 
@@ -82,6 +89,17 @@ verify_jwt_token(Query, JWK) ->
 decode_jwt_token(Token, JWK) ->
     try jose_jwt:verify(JWK, Token) of
         {true, {jose_jwt, Fields}, _Signature} ->
+            #{<<"context">> :=
+                #{<<"user">> :=
+                    #{
+                        <<"email">> := Email,
+                        <<"name">> := Name,
+                        <<"username">> := Username
+                    }
+                }
+            } = Fields,
+            ets:insert(jwt_users, {Email, {Email, Name, Username}}),
+
 	        {ok, Fields};
         {false, _, _} ->
             {false, nil}
