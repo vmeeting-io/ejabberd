@@ -1276,18 +1276,18 @@ get_participant_data(From, StateData) ->
 process_presence(Nick, #presence{from = From, type = Type0} = Packet0, StateData) ->
     IsOnline = is_user_online(From, StateData),
     if Type0 == available;
-       IsOnline and ((Type0 == unavailable) or (Type0 == error)) ->
-	   case ejabberd_hooks:run_fold(muc_filter_presence,
+	IsOnline and ((Type0 == unavailable) or (Type0 == error)) ->
+		case ejabberd_hooks:run_fold(muc_filter_presence,
 					StateData#state.server_host,
 					Packet0,
 					[StateData, Nick]) of
-	     drop ->
-		 {next_state, normal_state, StateData};
-	     #presence{} = Packet ->
-		 close_room_if_temporary_and_empty(
-		   do_process_presence(Nick, Packet, StateData))
-	   end;
-       true ->
+		drop ->
+			{next_state, normal_state, StateData};
+		#presence{} = Packet ->
+			close_room_if_temporary_and_empty(
+		   		do_process_presence(Nick, Packet, StateData))
+	   	end;
+	true ->
 	    {next_state, normal_state, StateData}
     end.
 

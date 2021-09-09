@@ -14,11 +14,6 @@
 
 start(Host, _Opts) ->
     ?INFO_MSG("conference_duration started ~n", []),
-    try ets:new(vm_room_data, [named_table, public])
-    catch
-        _:badarg -> ok
-    end,
-
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100).
 
@@ -45,8 +40,15 @@ on_join_room(State, ServerHost, _Packet, JID, _Room, _Nick) ->
     case lists:member(User, ?WHITE_LIST_USERS) of
     true -> ok;
     false ->
-        #state{jid = RoomJid, created_timestamp = CreatedTimeStamp} = State,
-        ?INFO_MSG("conference_duration:on_join_room ~ts ~ts ~b", [jid:encode(RoomJid), jid:encode(JID), CreatedTimeStamp]),
+        State1 = case State of 
+        #state{created_timestamp = TS} when TS == 0 ->
+            TS1 = erlang:system_time(millisecond),
+            State#state{ created_timestamp = TS1 };
+        _ ->
+            State
+        end,
+        #state{jid = RoomJid, created_timestamp = CreatedTimeStamp} = State1,
+        % ?INFO_MSG("conference_duration:on_join_room ~ts ~ts ~b", [jid:encode(RoomJid), jid:encode(JID), CreatedTimeStamp]),
         JsonMessage = #{type => conference_duration,
             created_timestamp => CreatedTimeStamp},
         Msg = #message{

@@ -17,12 +17,13 @@
         on_start_room/4, on_vm_pre_disco_info/1, mod_doc/0]).
 
 start(Host, _Opts) ->
-    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
+    ?INFO_MSG("mod_site_license:start ~ts", [Host]),
+    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 90),
     ejabberd_hooks:add(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
 stop(Host) ->
-    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
+    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 90),
     ejabberd_hooks:delete(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
 
@@ -99,7 +100,7 @@ process_notice(Data) ->
 
 process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
-    ?INFO_MSG("decoded data: ~p", [DataJSON]),
+    % ?INFO_MSG("decoded data: ~p", [DataJSON]),
     {match, [SiteID, RoomName]} = re:run(maps:get(<<"room_name">>, DataJSON),
                                         "\\[(?<site>\\w+)\\](?<room>.+)",
                                         [{capture, [site, room], binary}]),

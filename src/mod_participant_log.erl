@@ -37,7 +37,7 @@ stop(Host) ->
 
 on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
-    % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [Packet#presence.to#jid.server, MucHost]),
+    % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [_RoomID, Nick]),
 
     User = JID#jid.user,
 
@@ -58,7 +58,7 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
         Email = vm_util:get_subtag_value(SubEls, <<"email">>, null),
 
-        ?INFO_MSG("on_join_room: ~ts ~ts ~ts", [Name, StatsID, Email]),
+        % ?INFO_MSG("on_join_room: ~ts ~ts ~ts", [Name, StatsID, Email]),
         Body = #{
             conference => State#state.room_id,
             joinTime => JoinTime,
