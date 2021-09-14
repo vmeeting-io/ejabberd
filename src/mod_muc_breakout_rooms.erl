@@ -220,12 +220,12 @@ broadcast_breakout_rooms(RoomJid) ->
     when Data /= undefined,
          Data#data.is_broadcast_breakout_scheduled /= true ->
         % Only send each BROADCAST_ROOMS_INTERVAL seconds to prevent flooding of messages.
-        ?INFO_MSG("broadcast_breakout_rooms: ~ts", [jid:encode(MainRoomJid)]),
+        % ?INFO_MSG("broadcast_breakout_rooms: ~ts", [jid:encode(MainRoomJid)]),
         Data1 = Data#data{ is_broadcast_breakout_scheduled = true },
         ets:insert(vm_breakout_rooms, {jid:tolower(MainRoomJid), Data1}),
         send_timeout(300, update_breakout_rooms, [MainRoomJid]);
     Ret ->
-        ?INFO_MSG("broadcast_breakout_rooms: ~p", Ret),
+        % ?INFO_MSG("broadcast_breakout_rooms: ~p", Ret),
         ok
     end.
 
@@ -376,7 +376,7 @@ on_join_room(_ServerHost, Room, Host, From) ->
     if MainMuc == Host ->
         RoomJid = jid:make(Room, Host),
 
-        ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
+        % ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
         case From#jid.user /= <<"focus">> of
         true ->
             broadcast_breakout_rooms(RoomJid);
