@@ -342,6 +342,7 @@ find_user_by_nick(Nick, StateData) ->
 	[User] -> maps:get(User, StateData#state.users);
 	[FirstUser | _Users] -> maps:get(FirstUser, StateData#state.users)
     catch _:{badkey, _} ->
+        ?INFO_MSG("find_user_by_nick is failed: ~p", [Nick]),
 	    false
     end.
 
