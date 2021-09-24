@@ -152,7 +152,7 @@ update_breakout_rooms(RoomJid) ->
                 [] ->
                     {R, _} = vm_util:split_room_and_site(State#state.room),
                     R;
-                [T|_] -> T
+                [T|_] -> T#text.data
             end,
             Rooms = #{ Node => #{
                 isMainRoom => true,
@@ -352,6 +352,17 @@ process_message({#message{
     to = To,
     from = From
 } = Packet, State}) ->
+    % ?INFO_MSG("process_message: ~p", [Packet]),
+    case Packet#message.subject of
+    [#text{data = Value}] when Value /= <<>> ->
+        % ?INFO_MSG("subject: ~p", [Value]),
+        ToJid = vm_util:room_jid_match_rewrite(jid:remove_resource(To)),
+        broadcast_breakout_rooms(ToJid);
+    _ ->
+        % ?INFO_MSG("[[no subject]]", []),
+        ok
+    end,
+
     case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
     JsonMesage when JsonMesage /= null ->
 	    Message = jiffy:decode(JsonMesage, [return_maps]),
@@ -533,10 +544,12 @@ on_check_create_room(Acc, ServerHost, Room, Host) when Acc == true ->
 
 on_start_room(State, ServerHost, Room, Host) ->
     ?INFO_MSG("breakout_rooms:on_start_room: ~ts, ~ts", [Room, Host]),
-    if ServerHost == Host ->
+    BreakoutHost = breakout_room_muc(),
+    if BreakoutHost == Host ->
         RoomJid = jid:make(Room, Host),
-        case get_main_room(RoomJid) of
-        { Data, _ } when Data /= undefined ->
+        { Data, MainRoomJid } = get_main_room(RoomJid),
+        State1 = case Data of
+        _ when Data /= undefined ->
             Subject = maps:get(jid:encode(RoomJid), Data#data.breakout_rooms, null),
             if Subject /= null ->
                 State#state{subject = Subject};
@@ -545,7 +558,11 @@ on_start_room(State, ServerHost, Room, Host) ->
             end;
         _ ->
             State
-        end;
+        end,
+        State1#state{
+            is_breakout = true,
+            breakout_main_room = jid:encode(MainRoomJid)
+        };
     true ->
         State
     end.

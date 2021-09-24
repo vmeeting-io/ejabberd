@@ -218,7 +218,8 @@ internal_room_jid_match_rewrite(RoomJid, Stanza) ->
 
 
 get_subtag_value([El | Els], Name) ->
-    get_subtag_value([El | Els], Name, null).
+    get_subtag_value([El | Els], Name, null);
+get_subtag_value([], _) -> null.
 
 get_subtag_value([El | Els], Name, Default) ->
     case El of

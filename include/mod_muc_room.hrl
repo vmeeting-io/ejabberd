@@ -146,10 +146,8 @@
     max_durations           = -1 :: integer(),
     created_timestamp       = 0 :: non_neg_integer(),
     polls                   = [] :: [#poll{}],
-    is_close_all_scheduled  = false :: boolean(),
-    is_broadcast_breakout_scheduled = false :: boolean(),
-    breakout_rooms          = #{} :: #{binary() => #{}},
-    next_index              = 0 :: non_neg_integer()
+    is_breakout             = false :: boolean(),
+    breakout_main_room      = <<"">> :: binary()
 }).
 
 -type users() :: #{ljid() => #user{}}.

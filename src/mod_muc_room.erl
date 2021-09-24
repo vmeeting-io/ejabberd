@@ -4233,6 +4233,7 @@ process_iq_disco_info(From, #iq{type = get, lang = Lang,
 
 -spec iq_disco_info_extras(binary(), state(), boolean()) -> xdata().
 iq_disco_info_extras(Lang, StateData, Static) ->
+    % ?INFO_MSG("iq_disco_info_extras:", []),
     Config = StateData#state.config,
     AllowPM = case Config#config.allow_private_messages of
 		  false -> none;
@@ -4251,7 +4252,9 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
 	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
-	   {lobbyroom, StateData#state.lobbyroom}],
+	   {lobbyroom, StateData#state.lobbyroom},
+	   {isbreakout, StateData#state.is_breakout},
+	   {breakout_main_room, StateData#state.breakout_main_room}],
     Fs2 = case Config#config.pubsub of
 			Node when is_binary(Node), Node /= <<"">> ->
 				[{pubsub, Node}|Fs1];
