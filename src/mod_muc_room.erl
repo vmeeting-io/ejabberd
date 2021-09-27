@@ -57,7 +57,7 @@
 	 service_message/2,
 	 service_notice/2,
 	 broadcast_json_msg/3,
-	 kick_all/2,
+	 kick_all/3,
 	 get_disco_item/4]).
 
 %% gen_fsm callbacks
@@ -309,13 +309,19 @@ broadcast_json_msg(Room, FromNick, Msg) ->
 % kick all user/subsciber by setting their affilication to outcast
 % use this one instead of destroy room due to issue
 % https://github.com/vmeeting-io/vmeeting/issues/259
--spec kick_all(pid(), binary()) -> ok | error.
-kick_all(RoomPid, Reason) ->
+-spec kick_all(pid(), binary(), list(binary())) -> ok | error.
+kick_all(RoomPid, Reason, ExceptUsers) ->
 	case get_state(RoomPid) of
 	{ok, State} ->
 		Users = get_users_and_subscribers(State),
+		Affiliations = State#state.affiliations,
 		maps:fold(fun(_, #user{jid = Jid}, _) ->
-				change_item(RoomPid, Jid, affiliation, outcast, Reason)
+				case lists:member(Jid#jid.user, ExceptUsers) of
+				true ->
+					ok;
+				_ ->
+					change_item(RoomPid, Jid, affiliation, outcast, Reason)
+				end
 			end, [], Users),
 		ok;
 	_ ->

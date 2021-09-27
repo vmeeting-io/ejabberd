@@ -161,7 +161,8 @@ destroy_room(RoomPID, _Message)
     ok;
 destroy_room(RoomPID, Message) ->
     Mes = binary:list_to_bin(io_lib:format(Message, [])),
-    mod_muc_room:kick_all(RoomPID, Mes),
+    mod_muc_room:kick_all(RoomPID, Mes, [<<"focus">>]),
+    % mod_muc_room:destroy(RoomPID),
     ?INFO_MSG("destroy_room success: ~p", [RoomPID]).
 
 destroy_room_after_secs(RoomPID, Message, After) ->
