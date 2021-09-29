@@ -99,17 +99,24 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
 
     State.
 
-on_leave_room(_ServerHost, _Room, _Host, JID) ->
+on_leave_room(_ServerHost, _Room, Host, JID) ->
     LJID = jid:tolower(JID),
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    User = JID#jid.user,
 
-    case ets:lookup(vm_users, LJID) of
-    [{LJID, VMUser}] ->
-        VMUserID = maps:get(id, VMUser),
-        Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
-        httpc:request(delete, {Url, [], [], []}, [], [{sync, false}]),
+    case {string:equal(Host, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
+    {true, false} ->
+        case ets:lookup(vm_users, LJID) of
+        [{LJID, VMUser}] ->
+            VMUserID = maps:get(id, VMUser),
+            Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+            httpc:request(delete, {Url, [], [], []}, [], [{sync, false}]),
 
-        ets:delete(vm_users, LJID);
-    _ -> ok
+            ets:delete(vm_users, LJID);
+        _ -> ok
+        end;
+    _ ->
+        ok
     end.
 
 on_broadcast_presence(_ServerHost,
