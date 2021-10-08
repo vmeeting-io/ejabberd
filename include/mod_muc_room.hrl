@@ -147,7 +147,8 @@
     created_timestamp       = 0 :: non_neg_integer(),
     polls                   = [] :: [#poll{}],
     is_breakout             = false :: boolean(),
-    breakout_main_room      = <<"">> :: binary()
+    breakout_main_room      = <<"">> :: binary(),
+    timer_end_time          = 1 :: non_neg_integer()
 }).
 
 -type users() :: #{ljid() => #user{}}.

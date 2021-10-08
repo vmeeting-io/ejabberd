@@ -84,6 +84,16 @@ process_message(#message{
         DecodedData = jiffy:decode(Data, [return_maps]),
         ?INFO_MSG("decoded data: ~p", [DecodedData]),
         case maps:get(<<"type">>, DecodedData) of
+        <<"timer-end-time">> ->
+            % ?INFO_MSG("ANIS: decoded data2: ~p", [DecodedData]);
+            EndTime    = maps:get(<<"timerEndTime">>,DecodedData),
+            SenderName = maps:get(<<"senderName">>,DecodedData),
+            ?INFO_MSG("ANIS: timer decoded data endTime: ~p", [EndTime]),
+            ?INFO_MSG("ANIS: timer decoded data senderName: ~p", [SenderName]),
+            {pass, State#state{
+                timer_end_time = EndTime
+            }};
+
         <<"new-poll">> ->
             ?INFO_MSG("new-poll:", []),
             Answers = [#answer{name = Name, voters = #{}} || Name <- maps:get(<<"answers">>, DecodedData)],
