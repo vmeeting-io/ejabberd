@@ -4290,9 +4290,15 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 		false ->
 			Fs4
 		end,
-	Fs6 = case StateData#state.timer_end_time > 0 of
+	
+	Now = erlang:system_time(second),
+	EndTimeInSec = StateData#state.timer_end_time div 1000,
+
+	Fs6 = case EndTimeInSec - Now > 0 of
 		true ->
-			[{timer_end_time, integer_to_binary(StateData#state.timer_end_time)}|Fs5];
+			[
+				{timer_initiator,StateData#state.timer_initiator},
+			 	{timer_end_time, integer_to_binary(StateData#state.timer_end_time)}|Fs5];
 		false ->
 			Fs5
 		end,

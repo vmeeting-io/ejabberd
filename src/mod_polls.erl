@@ -82,16 +82,14 @@ process_message(#message{
     case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
     Data when Data /= null ->
         DecodedData = jiffy:decode(Data, [return_maps]),
-        ?INFO_MSG("decoded data: ~p", [DecodedData]),
+        % ?INFO_MSG("decoded data: ~p", [DecodedData]),
         case maps:get(<<"type">>, DecodedData) of
         <<"timer-end-time">> ->
-            % ?INFO_MSG("ANIS: decoded data2: ~p", [DecodedData]);
             EndTime    = maps:get(<<"timerEndTime">>,DecodedData),
             SenderName = maps:get(<<"senderName">>,DecodedData),
-            ?INFO_MSG("ANIS: timer decoded data endTime: ~p", [EndTime]),
-            ?INFO_MSG("ANIS: timer decoded data senderName: ~p", [SenderName]),
             {pass, State#state{
-                timer_end_time = EndTime
+                timer_end_time = EndTime,
+                timer_initiator = SenderName
             }};
 
         <<"new-poll">> ->
