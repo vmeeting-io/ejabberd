@@ -2151,6 +2151,7 @@ add_new_user(From, Nick, Packet, State) ->
     Collision = nick_collision(From, Nick, StateData),
     IsSubscribeRequest = not is_record(Packet, presence),
 	IsWhilelistUser = lists:member(From#jid.luser, ?WHITE_LIST_USERS) == true,
+	?INFO_MSG("add_new_user: ~p ~p ~p ~p ~p ~p ~p ~p", [ServiceAffiliation, Affiliation, NUsers, MaxUsers, MaxAdminUsers, IsWhilelistUser, NConferences, MaxConferences]),
     case {(ServiceAffiliation == owner orelse
 	     ((Affiliation == admin orelse Affiliation == owner)
 	       andalso NUsers < MaxAdminUsers)
