@@ -4290,8 +4290,20 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 		false ->
 			Fs4
 		end,
+	
+	Now = erlang:system_time(second),
+	EndTimeInSec = StateData#state.timer_end_time div 1000,
+
+	Fs6 = case EndTimeInSec - Now > 0 of
+		true ->
+			[
+				{timer_initiator,StateData#state.timer_initiator},
+			 	{timer_end_time, integer_to_binary(StateData#state.timer_end_time)}|Fs5];
+		false ->
+			Fs5
+		end,
     #xdata{type = result,
-	   fields = muc_roominfo:encode(Fs5, Lang)}.
+	   fields = muc_roominfo:encode(Fs6, Lang)}.
 
 -spec process_iq_disco_items(jid(), iq(), state()) ->
 				    {error, stanza_error()} | {result, disco_items()}.
