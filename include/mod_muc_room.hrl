@@ -18,7 +18,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--define(MAX_USERS_DEFAULT, 200).
+-define(MAX_USERS_DEFAULT, 2000).
 
 -define(SETS, gb_sets).
 

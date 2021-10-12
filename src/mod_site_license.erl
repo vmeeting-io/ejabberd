@@ -145,7 +145,9 @@ process_event(Data) ->
 
         case maps:find(<<"max_occupants">>, DataJSON) of
         {ok, MaxOccupants} ->
-            mod_muc_admin:change_room_option(RoomPID, max_users, MaxOccupants);
+            MaxUsers = if MaxOccupants < 0 -> ?MAX_USERS_DEFAULT;
+                true -> MaxOccupants end,
+            mod_muc_admin:change_room_option(RoomPID, max_users, MaxUsers);
         _ ->
             ok
         end;
