@@ -4261,7 +4261,8 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
 	   {lobbyroom, StateData#state.lobbyroom},
 	   {isbreakout, StateData#state.is_breakout},
-	   {breakout_main_room, StateData#state.breakout_main_room}],
+	   {breakout_main_room, StateData#state.breakout_main_room},
+	   {facedetect, StateData#state.face_detect}],
     Fs2 = case Config#config.pubsub of
 			Node when is_binary(Node), Node /= <<"">> ->
 				[{pubsub, Node}|Fs1];
