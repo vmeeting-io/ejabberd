@@ -18,7 +18,7 @@
 %%%
 %%%----------------------------------------------------------------------
 
--define(MAX_USERS_DEFAULT, 200).
+-define(MAX_USERS_DEFAULT, 2000).
 
 -define(SETS, gb_sets).
 
@@ -149,7 +149,8 @@
     is_breakout             = false :: boolean(),
     breakout_main_room      = <<"">> :: binary(),
     timer_end_time          = 1 :: non_neg_integer(),
-    timer_initiator         = <<"">> :: binary()
+    timer_initiator         = <<"">> :: binary(),
+    face_detect             = false :: boolean()
 }).
 
 -type users() :: #{ljid() => #user{}}.

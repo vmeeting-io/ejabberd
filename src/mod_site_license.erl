@@ -145,9 +145,22 @@ process_event(Data) ->
 
         case maps:find(<<"max_occupants">>, DataJSON) of
         {ok, MaxOccupants} ->
-            mod_muc_admin:change_room_option(RoomPID, max_users, MaxOccupants);
+            MaxUsers = if MaxOccupants < 0 -> ?MAX_USERS_DEFAULT;
+                true -> MaxOccupants end,
+            mod_muc_admin:change_room_option(RoomPID, max_users, MaxUsers);
         _ ->
             ok
+        end,
+        
+        case maps:find(<<"face_detect">>, DataJSON) of
+        {ok, Enabled} ->
+            case vm_util:get_room_state(Room, MucDomain) of
+            {ok, State2} when State2#state.face_detect /= Enabled ->
+                State3 = State2#state{face_detect = Enabled},
+                vm_util:set_room_state(Room, MucDomain, State3);
+            _ -> ok
+            end;
+        _ -> ok
         end;
     _ ->
         ok
