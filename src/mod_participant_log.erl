@@ -83,7 +83,8 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
                 LJID = jid:tolower(JID),
                 VMUser = #{id => UserID,
                     name => Name,
-                    email => Email
+                    email => Email,
+                    nick => Nick
                 },
 
                 ets:insert(vm_users, {LJID, VMUser});
@@ -165,6 +166,7 @@ on_broadcast_presence(_ServerHost, State,
         case ets:lookup(vm_users, LJID) of
         [{LJID, VMUser}] ->
             VMUserStatus = maps:get(status, VMUser, null),
+            VMUserNick = maps:get(nick, VMUser),
             % ?INFO_MSG("mod_participant_log:on_broadcast_presence ~p, ~p", [VMUserStatus, Status#text.data]),
 
             if VMUserStatus /= Status#text.data ->
@@ -174,7 +176,10 @@ on_broadcast_presence(_ServerHost, State,
                     "http://vmapi:5000/attentions/",
                     [],
                     "application/json",
-                    jiffy:encode(#{conference => MeetingID, status => NewStatus})
+                    jiffy:encode(#{
+                        conference => MeetingID,
+                        nick => VMUserNick,
+                        status => NewStatus})
                 }, [], [{sync, false}]),
 
                 ets:insert(vm_users, {LJID, VMUser#{status => NewStatus}});
