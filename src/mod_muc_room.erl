@@ -2543,7 +2543,7 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
             true ->
 				ServerHost = StateData#state.server_host,
 				ejabberd_hooks:run(vm_broadcast_presence, ServerHost,
-									[ServerHost, Presence0, jid:make(LNJID)]),
+									[ServerHost, StateData, Presence0, jid:make(LNJID)]),
 				{Role0, Presence0};
 
             false ->
