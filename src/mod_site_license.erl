@@ -157,7 +157,13 @@ process_event(Data) ->
             case vm_util:get_room_state(Room, MucDomain) of
             {ok, State2} when State2#state.face_detect /= Enabled ->
                 State3 = State2#state{face_detect = Enabled},
-                vm_util:set_room_state(Room, MucDomain, State3);
+                vm_util:set_room_state(Room, MucDomain, State3),
+                JsonMsg = #{
+                    type => <<"features/face-detect/update">>,
+                    facedetect => Enabled
+                },
+                ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg]),
+                mod_muc_room:broadcast_json_msg(State3, <<"">>, JsonMsg);
             _ -> ok
             end;
         _ -> ok
