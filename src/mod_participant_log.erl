@@ -10,14 +10,14 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
-    on_broadcast_presence/3, on_leave_room/4, on_start_room/4,
+    on_broadcast_presence/4, on_leave_room/4, on_start_room/4,
     on_room_destroyed/4, mod_doc/0]).
 
 start(Host, _Opts) ->
     ?INFO_MSG("muc_participant_log:start ~ts", [Host]),
     % This could run multiple times on different server host,
     % so need to wrap in try-catch, otherwise will get badarg error
-    try ets:new(vm_users, [named_table, public])
+    try ets:new(vm_users, [set, named_table, public])
     catch
         _:badarg -> ok
     end,
@@ -83,7 +83,8 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
                 LJID = jid:tolower(JID),
                 VMUser = #{id => UserID,
                     name => Name,
-                    email => Email
+                    email => Email,
+                    nick => Nick
                 },
 
                 ets:insert(vm_users, {LJID, VMUser});
@@ -119,8 +120,8 @@ on_leave_room(_ServerHost, _Room, Host, JID) ->
         ok
     end.
 
-on_broadcast_presence(_ServerHost,
-                        #presence{to = To, type = PresenceType, sub_els = SubEls},
+on_broadcast_presence(_ServerHost, State,
+                        #presence{to = To, type = PresenceType, status = [], sub_els = SubEls},
                         #jid{user = User} = JID) ->
     IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
@@ -134,15 +135,54 @@ on_broadcast_presence(_ServerHost,
             VMUserID = maps:get(id, VMUser),
             VMUserName =  maps:get(name, VMUser),
             Name = vm_util:get_subtag_value(SubEls, <<"nick">>),
+            % ?INFO_MSG("mod_participant_log:on_broadcast_presence ~p", [Presence]),
 
             if VMUserName /= Name ->
-                Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
-                ContentType = "application/json",
-                Body = #{name => Name},
-                ReqBody = jiffy:encode(Body),
+                httpc:request(patch, {
+                    "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+                    [],
+                    "application/json",
+                    jiffy:encode(#{name => Name})
+                }, [], [{sync, false}]),
+                ets:insert(vm_users, {LJID, VMUser#{name => Name}});
+            true ->
+                ok
+            end;
+        _ -> ok
+        end;
 
-                httpc:request(patch, {Url, [], ContentType, ReqBody}, [], [{sync, false}]);
+    _ -> ok
+    end;
+on_broadcast_presence(_ServerHost, State,
+                        #presence{to = To, type = PresenceType, status = [Status]},
+                        #jid{user = User} = JID) ->
+    IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
+    case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
+    {false, available, true} ->
+        LJID = jid:tolower(JID),
+
+        case ets:lookup(vm_users, LJID) of
+        [{LJID, VMUser}] ->
+            VMUserStatus = maps:get(status, VMUser, null),
+            VMUserNick = maps:get(nick, VMUser),
+            % ?INFO_MSG("mod_participant_log:on_broadcast_presence ~p, ~p", [VMUserStatus, Status#text.data]),
+
+            if VMUserStatus /= Status#text.data ->
+                MeetingID = State#state.config#config.meeting_id,
+                NewStatus = Status#text.data,
+                httpc:request(post, {
+                    "http://vmapi:5000/attentions/",
+                    [],
+                    "application/json",
+                    jiffy:encode(#{
+                        conference => MeetingID,
+                        nick => VMUserNick,
+                        status => NewStatus})
+                }, [], [{sync, false}]),
+
+                ets:insert(vm_users, {LJID, VMUser#{status => NewStatus}});
             true -> ok
             end;
 

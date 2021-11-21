@@ -2151,6 +2151,7 @@ add_new_user(From, Nick, Packet, State) ->
     Collision = nick_collision(From, Nick, StateData),
     IsSubscribeRequest = not is_record(Packet, presence),
 	IsWhilelistUser = lists:member(From#jid.luser, ?WHITE_LIST_USERS) == true,
+	?INFO_MSG("add_new_user: ~p ~p ~p ~p ~p ~p ~p ~p", [ServiceAffiliation, Affiliation, NUsers, MaxUsers, MaxAdminUsers, IsWhilelistUser, NConferences, MaxConferences]),
     case {(ServiceAffiliation == owner orelse
 	     ((Affiliation == admin orelse Affiliation == owner)
 	       andalso NUsers < MaxAdminUsers)
@@ -2542,7 +2543,7 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
             true ->
 				ServerHost = StateData#state.server_host,
 				ejabberd_hooks:run(vm_broadcast_presence, ServerHost,
-									[ServerHost, Presence0, jid:make(LNJID)]),
+									[ServerHost, StateData, Presence0, jid:make(LNJID)]),
 				{Role0, Presence0};
 
             false ->
@@ -4260,7 +4261,8 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
 	   {lobbyroom, StateData#state.lobbyroom},
 	   {isbreakout, StateData#state.is_breakout},
-	   {breakout_main_room, StateData#state.breakout_main_room}],
+	   {breakout_main_room, StateData#state.breakout_main_room},
+	   {facedetect, StateData#state.face_detect}],
     Fs2 = case Config#config.pubsub of
 			Node when is_binary(Node), Node /= <<"">> ->
 				[{pubsub, Node}|Fs1];
@@ -4290,8 +4292,20 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 		false ->
 			Fs4
 		end,
+	
+	Now = erlang:system_time(second),
+	EndTimeInSec = StateData#state.timer_end_time div 1000,
+
+	Fs6 = case EndTimeInSec - Now > 0 of
+		true ->
+			[
+				{timer_initiator,StateData#state.timer_initiator},
+			 	{timer_end_time, integer_to_binary(StateData#state.timer_end_time)}|Fs5];
+		false ->
+			Fs5
+		end,
     #xdata{type = result,
-	   fields = muc_roominfo:encode(Fs5, Lang)}.
+	   fields = muc_roominfo:encode(Fs6, Lang)}.
 
 -spec process_iq_disco_items(jid(), iq(), state()) ->
 				    {error, stanza_error()} | {result, disco_items()}.
