@@ -128,7 +128,7 @@ process_message(#message{
             end;
         _ ->
             ?INFO_MSG("unknown poll type: ~ts", [maps:get(<<"type">>, DecodedData)]),
-            drop
+            Packet
         end;
     _ ->
         Packet
