@@ -154,7 +154,7 @@ on_broadcast_presence(_ServerHost, State,
     _ -> ok
     end;
 on_broadcast_presence(_ServerHost, State,
-                        #presence{to = To, type = PresenceType, status = [Status]},
+                        #presence{to = To, type = PresenceType, status = [Status], sub_els = SubEls},
                         #jid{user = User} = JID) ->
     IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
@@ -165,8 +165,10 @@ on_broadcast_presence(_ServerHost, State,
 
         case ets:lookup(vm_users, LJID) of
         [{LJID, VMUser}] ->
+            VMUserEmail = maps:get(email, VMUser, null),
             VMUserStatus = maps:get(status, VMUser, null),
             VMUserNick = maps:get(nick, VMUser),
+            StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
             % ?INFO_MSG("mod_participant_log:on_broadcast_presence ~p, ~p", [VMUserStatus, Status#text.data]),
 
             if VMUserStatus /= Status#text.data ->
@@ -179,7 +181,9 @@ on_broadcast_presence(_ServerHost, State,
                     jiffy:encode(#{
                         conference => MeetingID,
                         nick => VMUserNick,
-                        status => NewStatus})
+                        status => NewStatus,
+                        email => VMUserEmail,
+                        stats_id => StatsID})
                 }, [], [{sync, false}]),
 
                 ets:insert(vm_users, {LJID, VMUser#{status => NewStatus}});
