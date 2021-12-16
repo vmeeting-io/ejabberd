@@ -14,7 +14,7 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1, process/2, destroy_room/2,
-        on_start_room/4, on_vm_pre_disco_info/1, mod_doc/0]).
+        on_start_room/4, on_vm_pre_disco_info/1, mod_doc/0, destroy_room_after_secs/3]).
 
 start(Host, _Opts) ->
     ?INFO_MSG("mod_site_license:start ~ts", [Host]),

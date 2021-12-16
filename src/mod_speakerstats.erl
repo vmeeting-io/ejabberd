@@ -23,13 +23,13 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:add(local_send_to_resource_hook, Host, ?MODULE, process_message, 50),
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
-    ejabberd_hooks:add(vm_leave_room, Host, ?MODULE, on_leave_room, 100).
+    ejabberd_hooks:add(leave_room, Host, ?MODULE, on_leave_room, 100).
 
 stop(Host) ->
     ejabberd_hooks:delete(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
     ejabberd_hooks:delete(local_send_to_resource_hook, Host, ?MODULE, process_message, 50),
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
-    ejabberd_hooks:delete(vm_leave_room, Host, ?MODULE, on_leave_room, 100),
+    ejabberd_hooks:delete(leave_room, Host, ?MODULE, on_leave_room, 100),
     ?INFO_MSG("speakerstats stoped ~n", []).
 
 -spec process_message(stanza()) -> stop | ok.

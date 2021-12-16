@@ -25,7 +25,7 @@
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_doc/0,
     process_message/1, on_start_room/4, on_room_destroyed/4, disco_local_identity/5,
-    on_join_room/4, on_leave_room/4, on_check_create_room/4,
+    on_join_room/5, on_leave_room/5, on_check_create_room/4,
     destroy_main_room/1, update_breakout_rooms/1]).
 
 -record(data,
@@ -400,7 +400,7 @@ process_message({#message{
 process_message({Packet, State}) ->
     {Packet, State}.
 
-on_join_room(_ServerHost, Room, Host, From) ->
+on_join_room(State, _ServerHost, Room, Host, From) ->
     MainMuc = gen_mod:get_module_opt(global, mod_muc, host),
     RoomJid = jid:make(Room, Host),
 
@@ -430,7 +430,8 @@ on_join_room(_ServerHost, Room, Host, From) ->
     %     ok;
     _ ->
         ok
-    end.
+    end,
+    State.
 
 exist_occupants_in_room(RoomJid) ->
     {LUser, LServer, _} = jid:tolower(RoomJid),
@@ -495,7 +496,7 @@ destroy_main_room(RoomJid) ->
         ?INFO_MSG("Unknown message received", [])
     end.
 
-on_leave_room(_ServerHost, Room, Host, JID) ->
+on_leave_room(State, _ServerHost, Room, Host, JID) ->
     ?INFO_MSG("breakout_rooms:on_leave_room: ~ts@~ts, ~ts", [Room, Host, jid:encode(JID)]),
     RoomJid = jid:make(Room, Host),
 
@@ -520,7 +521,8 @@ on_leave_room(_ServerHost, Room, Host, JID) ->
         true ->
             ok
         end
-    end.
+    end,
+    State.
 
 
 on_check_create_room(Acc, ServerHost, Room, Host) when Acc == true ->

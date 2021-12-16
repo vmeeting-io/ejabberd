@@ -1978,20 +1978,20 @@ set_subscriber(JID, Nick, Nodes,
 
 -spec add_online_user(jid(), binary(), role(), state()) -> state().
 add_online_user(JID, Nick, Role, StateData) ->
-    tab_add_online_user(JID, StateData),
+    StateData1 = tab_add_online_user(JID, StateData),
     User = #user{jid = JID, nick = Nick, role = Role},
-    reset_hibernate_timer(update_online_user(JID, User, StateData)).
+    reset_hibernate_timer(update_online_user(JID, User, StateData1)).
 
 -spec remove_online_user(jid(), state()) -> state().
 remove_online_user(JID, StateData) ->
     remove_online_user(JID, StateData, <<"">>).
 
 -spec remove_online_user(jid(), state(), binary()) -> state().
-remove_online_user(JID, StateData, Reason) ->
+remove_online_user(JID, StateData0, Reason) ->
     LJID = jid:tolower(JID),
-    #user{nick = Nick} = maps:get(LJID, StateData#state.users),
-    add_to_log(leave, {Nick, Reason}, StateData),
-    tab_remove_online_user(JID, StateData),
+    #user{nick = Nick} = maps:get(LJID, StateData0#state.users),
+    add_to_log(leave, {Nick, Reason}, StateData0),
+    StateData = tab_remove_online_user(JID, StateData0),
     Users = maps:remove(LJID, StateData#state.users),
     Nicks = try maps:get(Nick, StateData#state.nicks) of
 		[LJID] ->
@@ -4724,16 +4724,18 @@ tab_add_online_user(JID, StateData) ->
     Room = StateData#state.room,
     Host = StateData#state.host,
     ServerHost = StateData#state.server_host,
-    ejabberd_hooks:run(join_room, ServerHost, [ServerHost, Room, Host, JID]),
-    mod_muc:register_online_user(ServerHost, jid:tolower(JID), Room, Host).
+    StateData1 = ejabberd_hooks:run_fold(join_room, ServerHost, StateData, [ServerHost, Room, Host, JID]),
+    mod_muc:register_online_user(ServerHost, jid:tolower(JID), Room, Host),
+	StateData1.
 
 -spec tab_remove_online_user(jid(), state()) -> any().
 tab_remove_online_user(JID, StateData) ->
     Room = StateData#state.room,
     Host = StateData#state.host,
     ServerHost = StateData#state.server_host,
-    ejabberd_hooks:run(leave_room, ServerHost, [ServerHost, Room, Host, JID]),
-    mod_muc:unregister_online_user(ServerHost, jid:tolower(JID), Room, Host).
+    StateData1 = ejabberd_hooks:run_fold(leave_room, ServerHost, StateData, [ServerHost, Room, Host, JID]),
+    mod_muc:unregister_online_user(ServerHost, jid:tolower(JID), Room, Host),
+	StateData1.
 
 -spec tab_count_user(jid(), state()) -> non_neg_integer().
 tab_count_user(JID, StateData) ->

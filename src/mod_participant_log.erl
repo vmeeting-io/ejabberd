@@ -10,7 +10,7 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
-    on_broadcast_presence/4, on_leave_room/4, on_start_room/4,
+    on_broadcast_presence/4, on_leave_room/5, on_start_room/4,
     on_room_destroyed/4, mod_doc/0]).
 
 start(Host, _Opts) ->
@@ -35,15 +35,16 @@ stop(Host) ->
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
-on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
+on_join_room(State, ServerHost, Packet, JID, _RoomID, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [_RoomID, Nick]),
 
     User = JID#jid.user,
 
-    case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
+    State1 = case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
     {true, false} ->
         % ?INFO_MSG("mod_participant_log:joined ~ts", [jid:to_string(JID)]),
+
         {{Year, Month, Day}, {Hour, Min, Sec}} = erlang:localtime(),
         JoinTime = #{year => Year,
                 month => Month,
@@ -93,14 +94,21 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
                 ?WARNING_MSG("[~p] ~p: recv http reply ~p~n", [?MODULE, ?FUNCTION_NAME, ReplyInfo])
             end
         end,
-        httpc:request(post, {Url, [], ContentType, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]);
+        httpc:request(post, {Url, [], ContentType, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]),
 
-    _ -> ok
+        case {string:equal(JID#jid.lserver, ServerHost), State#state.terminate_meeting_id} of
+        {true, TimerId} when TimerId /= none ->
+            timer:cancel(TimerId),
+            ?INFO_MSG("participant_log: destroy meeting task is canceled!", []),
+            State#state{terminate_meeting_id = none};
+        _ -> State
+        end;
+    _ -> State
     end,
 
-    State.
+    State1.
 
-on_leave_room(_ServerHost, _Room, Host, JID) ->
+on_leave_room(State, ServerHost, Room, Host, JID) ->
     LJID = jid:tolower(JID),
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     User = JID#jid.user,
@@ -113,14 +121,24 @@ on_leave_room(_ServerHost, _Room, Host, JID) ->
             Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
             httpc:request(delete, {Url, [], [], []}, [], [{sync, false}]),
 
-            ets:delete(vm_users, LJID);
-        _ -> ok
+            ets:delete(vm_users, LJID),
+
+            % check host_leaved
+            case string:equal(ServerHost, JID#jid.lserver) of
+            true ->
+                RoomPID = mod_muc_admin:get_room_pid(Room, MucHost),
+                {ok, TimerId} = mod_site_license:destroy_room_after_secs(RoomPID, <<"destroyed_by_host">>, 5),
+                ?INFO_MSG("participant_log: ~p will destroy after 5 seconds", [Room]),
+                State#state{terminate_meeting_id = TimerId};
+            _ -> State
+            end;
+        _ -> State
         end;
     _ ->
-        ok
+        State
     end.
 
-on_broadcast_presence(_ServerHost, State,
+on_broadcast_presence(_ServerHost, _State,
                         #presence{to = To, type = PresenceType, status = [], sub_els = SubEls},
                         #jid{user = User} = JID) ->
     IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
