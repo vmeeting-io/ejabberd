@@ -67,7 +67,6 @@
     pubsub                               = <<"">> :: binary(),
     lang                                 = ejabberd_option:language() :: binary(),
     meeting_id                           = <<"">> :: binary(),
-    user_device_access_disabled          = false :: boolean(),
     time_remained                        = -1 :: integer()
 }).
 
@@ -150,7 +149,9 @@
     breakout_main_room      = <<"">> :: binary(),
     timer_end_time          = 1 :: non_neg_integer(),
     timer_initiator         = <<"">> :: binary(),
-    face_detect             = false :: boolean()
+    face_detect             = false :: boolean(),
+    av_moderation           = #{} :: #{binary() => [binary()]},
+    av_moderation_actors    = #{} :: #{binary() => binary()}
 }).
 
 -type users() :: #{ljid() => #user{}}.

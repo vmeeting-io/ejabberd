@@ -109,7 +109,7 @@ defmodule Ejabberd.Mixfile do
      {:pkix, "~> 1.0"},
      {:stringprep, ">= 1.0.26", override: true},
      {:stun, "~> 1.0"},
-     {:xmpp, git: "https://github.com/vmeeting-io/xmpp.git", ref: "d0e0a63da6def04e3c56570d2c915910138a8ec9"},
+     {:xmpp, git: "https://github.com/vmeeting-io/xmpp.git", ref: "00f7a3831395670acac259f72155868e18b5d5ab"},
      {:yconf, "~> 1.0"},
      {:uuid, "~> 2.0", hex: :uuid_erl}]
     ++ cond_deps()

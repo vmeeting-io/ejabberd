@@ -115,13 +115,6 @@ process_event(Data) ->
         mod_muc_admin:change_room_option(RoomPID, persistent, false),
         destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ when RoomPID /= room_not_found, RoomPID /= invalid_service ->
-        case maps:find(<<"userDeviceAccessDisabled">>, DataJSON) of
-        {ok, UDAD} ->
-            mod_muc_admin:change_room_option(RoomPID, user_device_access_disabled, UDAD);
-        _ ->
-            ok
-        end,
-
         case maps:find(<<"max_durations">>, DataJSON) of
         {ok, MaxDuration} when MaxDuration > 0 ->
             case vm_util:get_room_state(Room, MucDomain) of

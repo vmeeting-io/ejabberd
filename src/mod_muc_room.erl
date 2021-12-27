@@ -314,7 +314,6 @@ kick_all(RoomPid, Reason, ExceptUsers) ->
 	case get_state(RoomPid) of
 	{ok, State} ->
 		Users = get_users_and_subscribers(State),
-		Affiliations = State#state.affiliations,
 		maps:fold(fun(_, #user{jid = Jid}, _) ->
 				case lists:member(Jid#jid.user, ExceptUsers) of
 				true ->
@@ -2995,22 +2994,25 @@ search_affiliation_fallback(Affiliation, StateData) ->
 process_admin_items_set(UJID, Items, Lang, StateData) ->
     UAffiliation = get_affiliation(UJID, StateData),
     URole = get_role(UJID, StateData),
-    case catch find_changed_items(UJID, UAffiliation, URole,
-				  Items, Lang, StateData, [])
-	of
-      {result, Res} ->
-	  ?INFO_MSG("Processing MUC admin query from ~ts in "
+    case catch find_changed_items(UJID, UAffiliation, URole, Items, Lang, StateData, []) of
+	{result, Res} ->
+	  	?INFO_MSG("Processing MUC admin query from ~ts in "
 		    "room ~ts:~n ~p",
 		    [jid:encode(UJID),
 		     jid:encode(StateData#state.jid), Res]),
-	  case lists:foldl(process_item_change(UJID),
-			   StateData, lists:flatten(Res)) of
-	      {error, _} = Err ->
-		  Err;
-	      NSD ->
-		  store_room(NSD),
-		  {result, undefined, NSD}
-	  end;
+	  	case lists:foldl(process_item_change(UJID), StateData, lists:flatten(Res)) of
+		{error, _} = Err ->
+		  	Err;
+		NSD ->
+			case Items of
+			[#muc_item{jid = JID, reason = Reason, affiliation = Affiliation}|_] ->
+				ejabberd_hooks:run(vm_set_affiliation, NSD#state.server_host,
+					[NSD, UJID, JID, Affiliation, Reason]);
+			_ -> ok
+			end,
+		  	store_room(NSD),
+		  	{result, undefined, NSD}
+	  	end;
 	{error, Err} -> {error, Err}
     end.
 
@@ -3752,7 +3754,6 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({captcha_protected, V}, C) -> C#config{captcha_protected = V};
 	 ({allowinvites, V}, C) -> C#config{allow_user_invites = V};
 	 ({meetingId, V}, C) -> C#config{meeting_id = V};
-	 ({userDeviceAccessDisabled, V}, C) -> C#config{user_device_access_disabled = V};
 	 ({timeremained, V}, C) -> C#config{time_remained = V};
 	 ({allow_subscription, V}, C) -> C#config{allow_subscription = V};
 	 ({passwordprotectedroom, V}, C) -> C#config{password_protected = V};
@@ -4258,7 +4259,6 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {allowpm, AllowPM},
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
-	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
 	   {lobbyroom, StateData#state.lobbyroom},
 	   {isbreakout, StateData#state.is_breakout},
 	   {breakout_main_room, StateData#state.breakout_main_room},

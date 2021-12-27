@@ -14,10 +14,10 @@
 -include("ejabberd_http.hrl").
 -include("vmeeting_common.hrl").
 
--define(BROADCAST_ROOMS_INTERVAL, 0.3).
+-define(BROADCAST_ROOMS_INTERVAL, 300).
 -define(ROOMS_TTL_IF_ALL_LEFT, 5).
 -define(JSON_TYPE_ADD_BREAKOUT_ROOM, <<"features/breakout-rooms/add">>).
--define(JSON_TYPE_MOVE_TO_ROOM_REQUEST, <<"features/breakout-rooms/move-to-room-request">>).
+-define(JSON_TYPE_MOVE_TO_ROOM_REQUEST, <<"features/breakout-rooms/move-to-room">>).
 -define(JSON_TYPE_REMOVE_BREAKOUT_ROOM, <<"features/breakout-rooms/remove">>).
 -define(JSON_TYPE_UPDATE_BREAKOUT_ROOMS, <<"features/breakout-rooms/update">>).
 
@@ -112,7 +112,8 @@ send_json_msg(RoomJid, To, JsonMsg)
     ejabberd_router:route(#message{
         to = To,
         type = chat,
-        from = RoomJid,
+        from = breakout_room_muc(),
+        % from = RoomJid,
         sub_els = [#json_message{data=JsonMsg}]
     }).
 
@@ -130,7 +131,8 @@ get_participants(State) ->
             DisplayName = vm_util:get_subtag_value(
                 (V#user.last_presence)#presence.sub_els,
                 <<"nick">>),
-            maps:put(V#user.nick, #{
+            RealNick = vm_util:internal_room_jid_match_rewrite(V#user.nick),
+            maps:put(RealNick, #{
                 jid => jid:to_string(V#user.jid),
                 role => V#user.role,
                 displayName => DisplayName
@@ -226,13 +228,18 @@ broadcast_breakout_rooms(RoomJid) ->
         true ->
             ok
         end,
-        send_timeout(300, update_breakout_rooms, [MainRoomJid]);
+        send_timeout(?BROADCAST_ROOMS_INTERVAL, update_breakout_rooms, [MainRoomJid]);
     { undefined, MainRoomJid } ->
-        ?INFO_MSG("broadcast_breakout_rooms: undefined ~ts", [jid:encode(RoomJid)]),
-        ets:insert(vm_breakout_rooms, {
-            jid:tolower(MainRoomJid), #data{ breakout_rooms = #{} }
-        }),
-        send_timeout(300, update_breakout_rooms, [MainRoomJid]);
+        MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+        if MainRoomJid#jid.lserver == MucHost ->
+            ?INFO_MSG("broadcast_breakout_rooms: undefined ~ts", [jid:encode(RoomJid)]),
+            ets:insert(vm_breakout_rooms, {
+                jid:tolower(MainRoomJid), #data{ breakout_rooms = #{} }
+            }),
+            send_timeout(?BROADCAST_ROOMS_INTERVAL, update_breakout_rooms, [MainRoomJid]);
+        true ->
+            ok
+        end;
     _ ->
         ?INFO_MSG("broadcast_breakout_rooms is failed: ~p, ~ts", [jid:encode(RoomJid)]),
         ok
@@ -352,7 +359,7 @@ process_message({#message{
     to = To,
     from = From
 } = Packet, State}) ->
-    % ?INFO_MSG("process_message: ~p", [Packet]),
+    ?INFO_MSG("process_message: ~p", [Packet]),
     case Packet#message.subject of
     [#text{data = Value}] when Value /= <<>> ->
         % ?INFO_MSG("subject: ~p", [Value]),
