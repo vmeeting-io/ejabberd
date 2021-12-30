@@ -17,16 +17,20 @@
 start(Host, _Opts) ->
     ?INFO_MSG("av_moderation started ~n", []),
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
-    ejabberd_hooks:add(user_send_packet, Host, ?MODULE, process_message, 100),
+    ejabberd_hooks:add(filter_packet, ?MODULE, process_message, 100),
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:add(vm_set_affiliation, Host, ?MODULE, occupant_affiliation_changed, 100).
 
 stop(Host) ->
     ?INFO_MSG("av_moderation stoped ~n", []),
     ejabberd_hooks:delete(disco_local_identity, Host, ?MODULE, disco_local_identity, 75),
-    ejabberd_hooks:delete(user_send_packet, Host, ?MODULE, process_message, 100),
+    ejabberd_hooks:delete(filter_packet, ?MODULE, process_message, 100),
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:delete(vm_set_affiliation, Host, ?MODULE, occupant_affiliation_changed, 100).
+
+avmoderation_room_muc() ->
+    [ServerHost | _RestServers] = ejabberd_option:hosts(),
+    jid:make(<<"avmoderation.", ServerHost/binary>>).
 
 % -- Sends a json-message to the destination jid
 % -- @param to_jid the destination jid
@@ -36,9 +40,18 @@ send_json_message(RoomJid, To, JsonMsg)
     ejabberd_router:route(#message{
         to = To,
         type = chat,
-        from = RoomJid,
-        sub_els = [#json_message{data=JsonMsg}]
+        from = avmoderation_room_muc(),
+        sub_els = [#json_message{data = jiffy:encode(JsonMsg)}]
     }).
+
+find_user_by_nick(Nick, StateData) ->
+    try maps:get(Nick, StateData#state.nicks) of
+	[User] -> maps:get(User, StateData#state.users);
+	[FirstUser | _Users] -> maps:get(FirstUser, StateData#state.users)
+    catch _:{badkey, _} ->
+        ?INFO_MSG("find_user_by_nick is failed: ~p", [Nick]),
+	    false
+    end.
 
 % -- Notifies that av moderation has been enabled or disabled
 % -- @param jid the jid to notify, if missing will notify all occupants
@@ -47,10 +60,12 @@ send_json_message(RoomJid, To, JsonMsg)
 % -- @param actorJid the jid that is performing the enable/disable operation (the muc jid)
 % -- @param mediaType the media type for the moderation
 notify_occupants_enable(State, To, Enable, ActorJid, Kind) ->
+    ?INFO_MSG("notify_occupants_enabled: ~p, ~p, ~p, ~p", [To, Enable, ActorJid, Kind]),
+    RoomJid = vm_util:internal_room_jid_match_rewrite(State#state.jid),
     JsonMsg = #{
         type => <<"av_moderation">>,
         enabled => Enable,
-        room => vm_util:internal_room_jid_match_rewrite(State#state.jid),
+        room => jid:to_string(RoomJid),
         actor => ActorJid,
         kind => Kind
     },
@@ -58,9 +73,11 @@ notify_occupants_enable(State, To, Enable, ActorJid, Kind) ->
     if To /= null ->
         send_json_message(State#state.jid, To, JsonMsg);
     true ->
-        maps:foreach(fun (LJID, _) ->
-            send_json_message(State#state.jid, LJID, JsonMsg)
-        end, State#state.users)
+        lists:foreach(fun ({Key, User}) ->
+            if Key /= <<"focus">> ->
+                send_json_message(State#state.jid, User#user.jid, JsonMsg);
+            true -> ok end
+        end, maps:to_list(State#state.users))
     end.
 
 % -- Notifies about a change to the whitelist. Notifies all moderators and admin and the jid itself
@@ -70,19 +87,19 @@ notify_occupants_enable(State, To, Enable, ActorJid, Kind) ->
 % -- @param mediaType used only when a participant is approved (not sent to moderators)
 % -- @param removed whether the jid is removed or added
 notify_whitelist_change(State, JID, Moderators, Kind, Removed) ->
+    RoomJid = vm_util:internal_room_jid_match_rewrite(State#state.jid),
     ModeratorsJsonMsg = #{
         type => <<"av_moderation">>,
-        room => vm_util:internal_room_jid_match_rewrite(State#state.jid),
+        room => jid:to_string(RoomJid),
         whitelists => State#state.av_moderation,
         removed => Removed,
         kind => Kind
     },
-    ParticipantJsonMsg = maps:merge(
-        ModeratorsJsonMsg,
-        #{ whitelists => null, approved => not Removed }),
     LJID = jid:tolower(JID),
-    maps:foreach(fun (Key, User) ->
-        if Moderators == true, User#user.role == moderator ->
+    lists:foreach(fun ({Key, User}) ->
+        if Key == <<"focus">> ->
+            ok;
+        Moderators == true, User#user.role == moderator ->
             send_json_message(State#state.jid, Key, ModeratorsJsonMsg);
         Key == LJID ->
             % -- if the occupant is not moderator we send him that it is approved
@@ -90,12 +107,17 @@ notify_whitelist_change(State, JID, Moderators, Kind, Removed) ->
             if User#user.role == moderator ->
                 send_json_message(State#state.jid, Key, ModeratorsJsonMsg);
             true ->
-                send_json_message(State#state.jid, Key, ParticipantJsonMsg)
+                ParticipantJsonMsg = maps:merge(
+                    ModeratorsJsonMsg,
+                    #{ whitelists => null, approved => not Removed }),
+                send_json_message(State#state.jid, Key, maps:merge(
+                    ModeratorsJsonMsg,
+                    #{ whitelists => null, approved => not Removed }))
             end;
         true ->
             ok
         end
-    end, State#state.users).
+    end, maps:to_list(State#state.users)).
 
 % -- Notifies jid that is approved. This is a moderator to jid message to ask to unmute,
 % -- @param jid the jid to notify about the change
@@ -103,149 +125,98 @@ notify_whitelist_change(State, JID, Moderators, Kind, Removed) ->
 % -- @param room the room where to send it
 % -- @param mediaType the mediaType it was approved for
 notify_jid_approved(JID, From, RoomJid, Kind) ->
+    Room = vm_util:internal_room_jid_match_rewrite(RoomJid),
     JsonMsg = #{
         type => <<"av_moderation">>,
-        room => vm_util:internal_room_jid_match_rewrite(RoomJid),
+        room => jid:to_string(Room),
         approved => true, % -- we want to send to participants only that they were approved to unmute
         kind => Kind,
-        from => From
+        from => jid:to_string(From)
     },
     send_json_message(RoomJid, JID, JsonMsg).
 
-process_message({#message{
+process_message(#message{
     to = #jid{luser = <<"">>, lresource = <<"">>} = To,
     from = From
-} = Packet, State}) ->
-    ?INFO_MSG("process_message: ~p", [Packet]),
-
+} = Packet) ->
+    AvmoderationHost = avmoderation_room_muc(),
     case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
-    JsonMesage when JsonMesage /= null ->
+    JsonMesage when JsonMesage /= null, To == AvmoderationHost ->
 	    Message = jiffy:decode(JsonMesage, [return_maps]),
+        ?INFO_MSG("decoded message: ~p", [Message]),
+
         Kind = maps:get(<<"kind">>, Message),
         Room = jid:decode(maps:get(<<"room">>, Message)),
-        RoomJid = jid:decode(Room),
-        ?INFO_MSG("decoded message: ~ts -> ~ts~n~p~n~p, ~p", [jid:encode(From), jid:encode(To), Message, Room, RoomJid]),
-        RoomState = vm_util:get_state_from_jid(RoomJid),
-        LJID = jid:tolower(From),
-        Occupant = maps:get(LJID, RoomState#state.users),
-        case Message of
-        #{<<"enable">> := Enable} ->
-            % local enabled;
-            % if moderation_command.attr.enable == 'true' then
-            %     enabled = true;
-            %     if room.av_moderation and room.av_moderation[mediaType] then
-            %         module:log('warn', 'Concurrent moderator enable/disable request or something is out of sync');
-            %         return true;
-            %     else
-            %         if not room.av_moderation then
-            %             room.av_moderation = {};
-            %             room.av_moderation_actors = {};
-            %         end
-            %         room.av_moderation[mediaType] = array{};
-            %         room.av_moderation_actors[mediaType] = occupant.nick;
-            %     end
-            % else
-            %     enabled = false;
-            %     if not room.av_moderation then
-            %         module:log('warn', 'Concurrent moderator enable/disable request or something is out of sync');
-            %         return true;
-            %     else
-            %         room.av_moderation[mediaType] = nil;
-            %         room.av_moderation_actors[mediaType] = nil;
-
-            %         -- clears room.av_moderation if empty
-            %         local is_empty = true;
-            %         for key,_ in pairs(room.av_moderation) do
-            %             if room.av_moderation[key] then
-            %                 is_empty = false;
-            %             end
-            %         end
-            %         if is_empty then
-            %             room.av_moderation = nil;
-            %         end
-            %     end
-            % end
-
-            % -- send message to all occupants
-            % notify_occupants_enable(nil, enabled, room, occupant.nick, mediaType);
-            % return true;
-            M = maps:get(Kind, RoomState#state.av_moderation, not_found),
-            S = if Enable, M /= true ->
-                RS1 = RoomState#state{
-                    av_moderation = maps:put(Kind, [], State#state.av_moderation),
-                    av_moderation_actors = maps:put(Kind, Occupant#user.nick, State#state.av_moderation_actors)
-                },
-                vm_util:set_room_state_from_jid(RoomJid, RS1),
-                RS1;
-            not Enable, M /= not_found ->
-                RS2 = RoomState#state{
-                    av_moderation = maps:remove(Kind, State#state.av_moderation),
-                    av_moderation_actors = maps:remove(Kind, State#state.av_moderation_actors)
-                },
-                vm_util:set_room_state_from_jid(RoomJid, RS2),
-                RS2;
-            true ->
-                RoomState
-            end,
-            notify_occupants_enable(S, null, Enable, Occupant#user.nick, Kind);
-        #{<<"jidToWhitelist">> := JidToWhitelist} ->
-            % local occupant_jid = moderation_command.attr.jidToWhitelist;
-            % -- check if jid is in the room, if so add it to whitelist
-            % -- inform all moderators and admins and the jid
-            % local occupant_to_add = room:get_occupant_by_nick(room_jid_match_rewrite(occupant_jid));
-            % if not occupant_to_add then
-            %     module:log('warn', 'No occupant %s found for %s', occupant_jid, room.jid);
-            %     return false;
-            % end
-
-            % if room.av_moderation then
-            %     local whitelist = room.av_moderation[mediaType];
-            %     if not whitelist then
-            %         whitelist = array{};
-            %         room.av_moderation[mediaType] = whitelist;
-            %     end
-            %     whitelist:push(occupant_jid);
-
-            %     notify_whitelist_change(occupant_to_add.jid, true, room, mediaType, false);
-
-            %     return true;
-            % else
-            %     -- this is a moderator asking the jid to unmute without enabling av moderation
-            %     -- let's just send the event
-            %     notify_jid_approved(occupant_to_add.jid, occupant.nick, room, mediaType);
-            % end
-            State;
-        #{<<"jidToBlacklist">> := JidToBlacklist} ->
-            % local occupant_jid = moderation_command.attr.jidToBlacklist;
-            % -- check if jid is in the room, if so remove it from the whitelist
-            % -- inform all moderators and admins
-            % local occupant_to_remove = room:get_occupant_by_nick(room_jid_match_rewrite(occupant_jid));
-            % if not occupant_to_remove then
-            %     module:log('warn', 'No occupant %s found for %s', occupant_jid, room.jid);
-            %     return false;
-            % end
-
-            % if room.av_moderation then
-            %     local whitelist = room.av_moderation[mediaType];
-            %     if whitelist then
-            %         local index = get_index_in_table(whitelist, occupant_jid)
-            %         if(index) then
-            %             whitelist:pop(index);
-            %             notify_whitelist_change(occupant_to_remove.jid, true, room, mediaType, true);
-            %         end
-            %     end
-
-            %     return true;
-            % end
-            State;
-        _ -> State
-        end,
-        {drop, State};
-    _ ->
-        {Packet, State}
-    end;
-process_message({Packet, State}) ->
-    {Packet, State}.
+        RoomJid = vm_util:room_jid_match_rewrite(Room),
+        case vm_util:get_state_from_jid(RoomJid) of
+        {ok, RoomState} ->
+            LJID = jid:tolower(From),
+            Occupant = maps:get(LJID, RoomState#state.users),
+            Whitelist = maps:get(Kind, RoomState#state.av_moderation, []),
+            IsEmpty = maps:size(RoomState#state.av_moderation) == 0,
+            case Message of
+            #{<<"enable">> := Enable} ->
+                M = maps:get(Kind, RoomState#state.av_moderation, not_found),
+                S = if Enable, M == not_found ->
+                    RS1 = RoomState#state{
+                        av_moderation = maps:put(Kind, [], RoomState#state.av_moderation),
+                        av_moderation_actors = maps:put(Kind, Occupant#user.nick, RoomState#state.av_moderation_actors)
+                    },
+                    vm_util:set_room_state_from_jid(RoomJid, RS1),
+                    RS1;
+                not Enable, M /= not_found ->
+                    RS2 = RoomState#state{
+                        av_moderation = maps:remove(Kind, RoomState#state.av_moderation),
+                        av_moderation_actors = maps:remove(Kind, RoomState#state.av_moderation_actors)
+                    },
+                    vm_util:set_room_state_from_jid(RoomJid, RS2),
+                    RS2;
+                true ->
+                    ?WARNING_MSG("Concurrent moderator enable/disable request or something is out of sync", []),
+                    RoomState
+                end,
+                notify_occupants_enable(S, null, Enable, Occupant#user.nick, Kind);
+            #{<<"jidToWhitelist">> := JidToWhitelist} ->
+                ?INFO_MSG("jidToWhitelist: ~p", [JidToWhitelist]),
+                Jid = jid:decode(JidToWhitelist),
+                case find_user_by_nick(Jid#jid.lresource, RoomState) of
+                false ->
+                    ?WARNING_MSG("No occupant ~ts found for ~ts", [JidToWhitelist, Room]),
+                    ok;
+                OccupantToAdd ->
+                    if not IsEmpty ->
+                        RS3 = RoomState#state{
+                            av_moderation = [JidToWhitelist | Whitelist]
+                        },
+                        vm_util:set_room_state_from_jid(RoomJid, RS3),
+                        notify_whitelist_change(RS3, OccupantToAdd#user.jid, true, Kind, false);
+                    true ->
+                        notify_jid_approved(OccupantToAdd#user.jid, From, RoomState#state.jid, Kind)
+                    end
+                end;
+            #{<<"jidToBlacklist">> := JidToBlacklist} ->
+                ?INFO_MSG("jidToBlacklist: ~p", [JidToBlacklist]),
+                Jid = jid:encode(JidToBlacklist),
+                case find_user_by_nick(Jid#jid.lresource, RoomState) of
+                false -> 
+                    ?WARNING_MSG("No occupant ~ts found for ~ts", [JidToBlacklist, Room]),
+                    ok;
+                OccupantToRemove ->
+                    IsMember = lists:member(JidToBlacklist, Whitelist),
+                    if not IsEmpty, IsMember ->
+                        RS4 = RoomState#state{
+                            av_moderation = lists:delete(JidToBlacklist, Whitelist)
+                        },
+                        vm_util:set_room_state_from_jid(RoomJid, RS4),
+                        notify_whitelist_change(RS4, OccupantToRemove#user.jid, true, Kind, true);
+                    true -> ok end
+                end;
+            _ -> ok end;
+        _ -> ok end,
+        drop;
+    _ -> Packet end;
+process_message(Packet) ->
+    Packet.
 
 on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
@@ -255,20 +226,20 @@ on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
     case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
     {true, false} when State#state.av_moderation /= #{} ->
         ?INFO_MSG("on_join_room: ~p", [State#state.av_moderation]),
-        maps:foreach(fun (K, V) ->
+        lists:foreach(fun ({K, V}) ->
             Actor = maps:get(K, State#state.av_moderation_actors),
             notify_occupants_enable(State, JID, true, Actor, K)
-        end, State#state.av_moderation),
+        end, maps:to_list(State#state.av_moderation)),
 
         % -- NOTE for some reason event.occupant.role is not reflecting the actual occupant role (when changed
         % -- from allowners module) but iterating over room occupants returns the correct role
-        maps:foreach(fun (LJID, User) ->
+        list:foreach(fun ({LJID, User}) ->
             % -- if moderator send the whitelist
             if User#user.nick == Nick, User#user.role == moderator ->
                 notify_whitelist_change(State, User#user.jid, false, undefined, false);
             true -> ok
             end
-        end, State#state.users);
+        end, maps:to_list(State#state.users));
     {true, false} ->
         ?INFO_MSG("on_join_room: ~p", [State#state.av_moderation]);
     _ -> ok
@@ -282,12 +253,12 @@ occupant_affiliation_changed(State, Actor, JID, Affiliation, _Reason) ->
     if Actor == true, Affiliation == owner, State#state.av_moderation /= #{} ->
         % -- event.jid is the bare jid of participant
         LJID = jid:tolower(JID),
-        maps:foreach(fun (Key, User) ->
+        lists:foreach(fun ({Key, User}) ->
             if Key == LJID ->
                 notify_whitelist_change(State, User#user.jid, false, undefined, false);
             true -> ok
             end
-        end, State#state.users);
+        end, maps:to_list(State#state.users));
     true -> ok
     end.
 

@@ -14,7 +14,7 @@
 
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_doc/0,
-    process_message/3, on_join_room/6]).
+    on_filter_message/3, on_join_room/6]).
 
 start(Host, _Opts) ->
     % This could run multiple times on different server host,
@@ -25,12 +25,12 @@ start(Host, _Opts) ->
     end,
 
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
-    ejabberd_hooks:add(muc_filter_message, Host, ?MODULE, process_message, 50),
+    ejabberd_hooks:add(muc_filter_message, Host, ?MODULE, on_filter_message, 50),
     ok.
 
 stop(Host) ->
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
-    ejabberd_hooks:delete(muc_filter_message, Host, ?MODULE, process_message, 50),
+    ejabberd_hooks:delete(muc_filter_message, Host, ?MODULE, on_filter_message, 50),
     ok.
 
 depends(_Host, _Opts) ->
@@ -46,7 +46,7 @@ mod_doc() ->
 % Sends the current poll state to new occupants after joining a room.
 on_join_room(State, _ServerHost, _Packet, JID, _RoomID, _Nick) ->
     IsHealthCheck = vm_util:is_healthcheck_room((State#state.jid)#jid.luser),
-    if not IsHealthCheck, State#state.polls /= [] ->
+    if not IsHealthCheck, State#state.polls#polls.order /= [] ->
         JsonData = jiffy:encode(#{
             type => <<"old-polls">>,
             polls => [#{
@@ -58,7 +58,7 @@ on_join_room(State, _ServerHost, _Packet, JID, _RoomID, _Nick) ->
                     name => Answer#answer.name,
                     voters => Answer#answer.voters
                 } || Answer <- Poll#poll.answers]
-            } || Poll <- lists:reverse(State#state.polls)]
+            } || Poll <- lists:reverse(State#state.polls#polls.order)]
         }),
         Msg = #message{
             from = State#state.jid,
@@ -75,7 +75,7 @@ on_join_room(State, _ServerHost, _Packet, JID, _RoomID, _Nick) ->
 % by listening to "new-poll" and "answer-poll" messages,
 % and updating the room poll data accordingly.
 % This mirrors the client-side poll update logic.
-process_message(#message{
+on_filter_message(#message{
     to = #jid{lresource = <<"">>},
     type = groupchat
 } = Packet, State, _FromNick) ->
@@ -83,7 +83,7 @@ process_message(#message{
     Data when Data /= null ->
         DecodedData = jiffy:decode(Data, [return_maps]),
         % ?INFO_MSG("decoded data: ~p", [DecodedData]),
-        case maps:get(<<"type">>, DecodedData) of
+        case maps:get(<<"type">>, DecodedData, none) of
         <<"timer-end-time">> ->
             EndTime    = maps:get(<<"timerEndTime">>,DecodedData),
             SenderName = maps:get(<<"senderName">>,DecodedData),
@@ -102,13 +102,15 @@ process_message(#message{
                 question = maps:get(<<"question">>, DecodedData),
                 answers = Answers
             },
-            {pass, State#state{
-                polls = [NewPoll | State#state.polls]
-            }};
+            Polls = State#state.polls,
+            {pass, State#state{ polls = Polls#polls{
+                by_id = maps:put(NewPoll#poll.id, NewPoll, Polls#polls.by_id),
+                order = [NewPoll | Polls#polls.order]
+            }}};
         <<"answer-poll">> ->
             PollId = maps:get(<<"pollId">>, DecodedData),
-            case lists:keyfind(PollId, 2, State#state.polls) of
-            false ->
+            case maps:get(PollId, State#state.polls#polls.by_id, not_found) of
+            not_found ->
                 ?INFO_MSG("anser-poll: ~ts is not found", [PollId]),
                 drop;
             Poll ->
@@ -122,9 +124,11 @@ process_message(#message{
                         Answer#answer{ voters = maps:put(VoterId, Value, Answer#answer.voters) }
                     end, AnswersZip)
                 },
-                {pass, State#state{
-                    polls = lists:keyreplace(PollId, 2, State#state.polls, Poll2)
-                }}
+                Polls = State#state.polls,
+                {pass, State#state{ polls = Polls#polls{
+                    by_id = maps:put(Poll2#poll.id, Poll2, Polls#polls.by_id),
+                    order = lists:keyreplace(PollId, 2, Polls#polls.order, Poll2)
+                }}}
             end;
         _ ->
             ?INFO_MSG("unknown poll type: ~ts", [maps:get(<<"type">>, DecodedData)]),
@@ -133,6 +137,6 @@ process_message(#message{
     _ ->
         Packet
     end;
-process_message(Packet, _State, _FromNick) ->
+on_filter_message(Packet, _State, _FromNick) ->
     Packet.
 

@@ -16,6 +16,7 @@
 
 -define(BROADCAST_ROOMS_INTERVAL, 300).
 -define(ROOMS_TTL_IF_ALL_LEFT, 5).
+-define(BREAKOUT_ROOMS_IDENTITY_TYPE, <<"breakout_rooms">>).
 -define(JSON_TYPE_ADD_BREAKOUT_ROOM, <<"features/breakout-rooms/add">>).
 -define(JSON_TYPE_MOVE_TO_ROOM_REQUEST, <<"features/breakout-rooms/move-to-room">>).
 -define(JSON_TYPE_REMOVE_BREAKOUT_ROOM, <<"features/breakout-rooms/remove">>).
@@ -33,8 +34,9 @@
     is_close_all_scheduled  = false :: boolean(),
     is_broadcast_breakout_scheduled = false :: boolean(),
     breakout_rooms          = #{} :: #{binary() => binary()},
-    next_index              = 0 :: non_neg_integer(),
-    room_infos              = #{} :: #{binary() => #{}}
+    breakout_rooms_active   = false :: boolean(),
+    breakout_rooms_counter  = 0 :: non_neg_integer(),
+    breakout_rooms_info     = #{} :: #{binary() => #{}}
 }).
 
 start(Host, _Opts) ->
@@ -191,8 +193,9 @@ update_breakout_rooms(RoomJid) ->
             end, Rooms, Data2#data.breakout_rooms),
 
             JsonMsg = #{
-                type => ?JSON_TYPE_UPDATE_BREAKOUT_ROOMS,
-                nextIndex => Data2#data.next_index,
+                type => ?BREAKOUT_ROOMS_IDENTITY_TYPE,
+                event => ?JSON_TYPE_UPDATE_BREAKOUT_ROOMS,
+                roomCounter => Data2#data.breakout_rooms_counter,
                 rooms => Rooms2
             },
 
@@ -248,8 +251,8 @@ broadcast_breakout_rooms(RoomJid) ->
 
 % Managing breakout rooms
 
-create_breakout_room(RoomJid, Subject, NextIndex) ->
-    ?INFO_MSG("create_breakout_room: ~p, ~p, ~p", [jid:encode(RoomJid), Subject, NextIndex]),
+create_breakout_room(RoomJid, Subject) ->
+    ?INFO_MSG("create_breakout_room: ~p, ~p", [jid:encode(RoomJid), Subject]),
     % Breakout rooms are named like the main room with a random uuid suffix
     RoomName = RoomJid#jid.luser,
     RandUUID = list_to_binary(uuid:uuid_to_string(uuid:get_v4())),
@@ -259,14 +262,15 @@ create_breakout_room(RoomJid, Subject, NextIndex) ->
 
     Key = jid:tolower(RoomJid),
     Data = case ets:lookup(vm_breakout_rooms, Key) of
-        [] -> #data{ breakout_rooms = #{} };
+        [] -> #data{
+            breakout_rooms = #{},
+            breakout_rooms_counter = 0,
+            breakout_rooms_info = #{} };
         [{_, FoundData}] -> FoundData
     end,
 
     % TODO: create room on vmapi
-    case mod_muc_admin:create_room_with_opts(BreakoutRoom, breakout_room_muc(),
-                                    ServerHost,
-                                    [{<<"persistent">>, <<"true">>}]) of
+    case mod_muc_admin:create_room(BreakoutRoom, breakout_room_muc(), ServerHost) of
     ok ->
         {Name, SiteID} = vm_util:split_room_and_site(BreakoutRoom),
         Url = "http://vmapi:5000/sites/"
@@ -280,62 +284,69 @@ create_breakout_room(RoomJid, Subject, NextIndex) ->
         case httpc:request(post, {Url, Headers, ContentType, ReqBody}, [], []) of
         {ok, {{_, 201, _} , _Header, Rep}} ->
             RepJSON = jiffy:decode(Rep, [return_maps]),
-            #data{breakout_rooms = Rooms, room_infos = Infos} = Data,
+            #data{
+                breakout_rooms = Rooms,
+                breakout_rooms_counter = Counter,
+                breakout_rooms_info = Info} = Data,
             RoomStr = jid:encode(BreakoutRoomJid),
             ets:insert(vm_breakout_rooms, {
                 Key,
                 Data#data{
+                    breakout_rooms_counter = Counter + 1,
                     breakout_rooms = maps:put(RoomStr, Subject, Rooms),
-                    room_infos = maps:put(RoomStr, RepJSON, Infos),
-                    next_index = NextIndex
+                    breakout_rooms_active = true,
+                    breakout_rooms_info = maps:put(RoomStr, RepJSON, Info)
                 }
-            });
+            }),
+            % Make room persistent - not to be destroyed - if all participants join breakout rooms.
+            RoomPid = vm_util:get_room_pid_from_jid(RoomJid),
+            mod_muc_admin:change_room_option(RoomPid, persistent, true),
+            broadcast_breakout_rooms(RoomJid);
         Err ->
             ?INFO_MSG("create_breakout_room: failed ~p", [Err]),
             ok
         end;
     _ ->
         ?INFO_MSG("create_breakout_room: failed ~p", [BreakoutRoom])
-    end,
-
-    % Make room persistent - not to be destroyed - if all participants join breakout rooms.
-    RoomPid = vm_util:get_room_pid_from_jid(RoomJid),
-    mod_muc_admin:change_room_option(RoomPid, persistent, true),
-    broadcast_breakout_rooms(RoomJid).
+    end.
 
 destroy_breakout_room(RoomJid, Message) ->
     ?INFO_MSG("destory_breakout_room: ~p", [jid:encode(RoomJid)]),
+    RoomStr = jid:encode(RoomJid),
+
     case get_main_room(RoomJid) of
     { Data, MainJid } when MainJid /= RoomJid ->
-        #data{breakout_rooms = Rooms, room_infos = Infos} = Data,
-        RoomStr = jid:encode(RoomJid),
-        RoomInfo = maps:get(RoomStr, Infos),
-        RoomID = maps:get(<<"_id">>, RoomInfo),
-        ets:insert(vm_breakout_rooms, {
-            jid:tolower(MainJid),
-            Data#data{
-                breakout_rooms = maps:remove(RoomStr, Rooms),
-                room_infos = maps:remove(RoomStr, Infos)
-            }
-        }),
+        #data{breakout_rooms = Rooms, breakout_rooms_info = Info} = Data,
+        case maps:get(RoomStr, Info, none) of
+        none -> ok;
+        RoomInfo ->
+            RoomID = maps:get(<<"_id">>, RoomInfo),
+            ets:insert(vm_breakout_rooms, {
+                jid:tolower(MainJid),
+                Data#data{
+                    breakout_rooms = maps:remove(RoomStr, Rooms),
+                    breakout_rooms_info = maps:remove(RoomStr, Info)
+                }
+            }),
 
-        % TODO: delete room on vmapi
-        {Name, SiteID} = vm_util:split_room_and_site(RoomJid#jid.luser),
-        Url = "http://vmapi:5000/sites/"
-            ++ binary:bin_to_list(SiteID)
-            ++ "/conferences/"
-            ++ binary:bin_to_list(RoomID),
-        Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
-        Headers = [{"Authorization", "Bearer " ++ Token}],
-        httpc:request(delete, {Url, Headers, [], []}, [], [{sync, false}]),
+            % TODO: delete room on vmapi
+            {Name, SiteID} = vm_util:split_room_and_site(RoomJid#jid.luser),
+            Url = "http://vmapi:5000/sites/"
+                ++ binary:bin_to_list(SiteID)
+                ++ "/conferences/"
+                ++ binary:bin_to_list(RoomID),
+            Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
+            Headers = [{"Authorization", "Bearer " ++ Token}],
+            httpc:request(delete, {Url, Headers, [], []}, [], [{sync, false}]),
 
-        broadcast_breakout_rooms(MainJid),
-        case vm_util:get_room_pid_from_jid(RoomJid) of
-        RoomPid when RoomPid /= room_not_found, RoomPid /= invalid_service ->
-            mod_muc_admin:change_room_option(RoomPid, persistent, false),
-            mod_muc_room:destroy(RoomPid, Message);
-        _ ->
-            ok
+            broadcast_breakout_rooms(MainJid),
+            case vm_util:get_room_pid_from_jid(RoomJid) of
+            RoomPid when RoomPid /= room_not_found, RoomPid /= invalid_service ->
+                % mod_muc_admin:change_room_option(RoomPid, persistent, false),
+                mod_muc_room:destroy(RoomPid, Message);
+            _ ->
+                ok
+            end
         end;
     _ ->
         ok
@@ -356,38 +367,28 @@ find_user_by_nick(Nick, StateData) ->
 % Handling events
 
 process_message({#message{
+    type = Type,
     to = To,
     from = From
-} = Packet, State}) ->
-    ?INFO_MSG("process_message: ~p", [Packet]),
-    case Packet#message.subject of
-    [#text{data = Value}] when Value /= <<>> ->
-        % ?INFO_MSG("subject: ~p", [Value]),
-        ToJid = vm_util:room_jid_match_rewrite(jid:remove_resource(To)),
-        broadcast_breakout_rooms(ToJid);
-    _ ->
-        % ?INFO_MSG("[[no subject]]", []),
-        ok
-    end,
-
+} = Packet, State} = Acc) when Type /= error ->
+    BreakoutHost = jid:make(breakout_room_muc()),
     case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
-    JsonMesage when JsonMesage /= null ->
-	    Message = jiffy:decode(JsonMesage, [return_maps]),
+    JsonMesage when JsonMesage /= null, To == BreakoutHost ->
+        ?INFO_MSG("breakout_room:process_message: ~p", [Packet]),
+        Message = jiffy:decode(JsonMesage, [return_maps]),
         ?INFO_MSG("decoded message: ~p, from: ~ts, to: ~ts", [Message, jid:encode(From), jid:encode(To)]),
-        Type = maps:get(<<"type">>, Message),
+
+        DType = maps:get(<<"type">>, Message),
         RoomJid = vm_util:room_jid_match_rewrite(jid:remove_resource(To)),
         case [vm_util:get_state_from_jid(RoomJid), get_main_room(RoomJid)] of
         [{ok, RoomState}, {_, MainJid}] ->
-            case {mod_muc_room:get_affiliation(From, RoomState), Type} of
+            case {mod_muc_room:get_affiliation(From, RoomState), DType} of
             {owner, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
                 Subject = maps:get(<<"subject">>, Message),
-                NextIndex = maps:get(<<"nextIndex">>, Message),
-                create_breakout_room(MainJid, Subject, NextIndex),
-                {drop, State};
+                create_breakout_room(MainJid, Subject);
             {owner, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
                 BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
-                destroy_breakout_room(jid:decode(BreakoutRoomJid)),
-                {drop, State};
+                destroy_breakout_room(jid:decode(BreakoutRoomJid));
             {owner, ?JSON_TYPE_MOVE_TO_ROOM_REQUEST} ->
                 Nick = jid:decode(To#jid.resource),
                 ParticipantRoomJid = vm_util:room_jid_match_rewrite(Nick),
@@ -395,32 +396,26 @@ process_message({#message{
                 { ok, ParticipantRoomState } ->
                     Occupant = find_user_by_nick(Nick#jid.lresource, ParticipantRoomState),
                     send_json_msg(ParticipantRoomJid, Occupant#user.jid, JsonMesage)
-                end,
-                {drop, State}
+                end
             end;
-        _ ->
-            {Packet, State}
-        end;
+        _ -> ok
+        end,
+        {stop, Acc};
     _ ->
-        {Packet, State}
+        Acc
     end;
-process_message({Packet, State}) ->
-    {Packet, State}.
+process_message(Acc) ->
+    Acc.
 
 on_join_room(_ServerHost, Room, Host, From) ->
     MainMuc = gen_mod:get_module_opt(global, mod_muc, host),
     RoomJid = jid:make(Room, Host),
 
-    ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
-    case From#jid.user /= <<"focus">> of
-    true ->
-        broadcast_breakout_rooms(RoomJid);
-    _ ->
-        ok
-    end,
-
     case get_main_room(RoomJid) of
-    {Data, MainJid} when Data /= undefined ->
+    {Data, MainJid} when Data /= undefined, From#jid.user /= <<"focus">>, Data#data.breakout_rooms_active == true ->
+        ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
+        broadcast_breakout_rooms(RoomJid),
+
         Key = jid:tolower(MainJid),
         if Data#data.is_close_all_scheduled == true ->
             % Prevent closing all rooms if a participant has joined (see on_occupant_left).
@@ -430,11 +425,6 @@ on_join_room(_ServerHost, Room, Host, From) ->
         true ->
             ok
         end;
-    % {_, MainJid} when RoomJid == MainJid ->
-    %     ets:insert(vm_breakout_rooms, {
-    %         Key, #data{ breakout_rooms = #{} }
-    %     }),
-    %     ok;
     _ ->
         ok
     end.

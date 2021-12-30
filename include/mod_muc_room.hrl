@@ -104,6 +104,11 @@
     voters = #{} :: map()
 }).
 
+-record(compact_answer, {
+    key = 0 :: integer(),
+    name = <<"">> :: binary()
+}).
+
 -record(poll, {
     id = <<"">> :: binary(),
     senderId = <<"">> :: binary(),
@@ -111,6 +116,13 @@
     question = <<"">> :: binary(),
     answers = [] :: [#answer{}]
 }).
+
+-record(polls, {
+    by_id = #{} :: #{binary() => #poll{}},
+    order = [] :: [#poll{}]
+}).
+
+-type polls() :: #polls{}.
 
 -record(state,
 {
@@ -144,7 +156,7 @@
     main_room_pid           = none :: pid() | none,
     max_durations           = -1 :: integer(),
     created_timestamp       = 0 :: non_neg_integer(),
-    polls                   = [] :: [#poll{}],
+    polls                   = #polls{} :: polls(),
     is_breakout             = false :: boolean(),
     breakout_main_room      = <<"">> :: binary(),
     timer_end_time          = 1 :: non_neg_integer(),
