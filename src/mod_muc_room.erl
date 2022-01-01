@@ -2000,6 +2000,10 @@ remove_online_user(JID, StateData, Reason) ->
 	    catch _:{badkey, _} ->
 		    StateData#state.nicks
 	    end,
+    Room = StateData#state.room,
+    Host = StateData#state.host,
+    ServerHost = StateData#state.server_host,
+    ejabberd_hooks:run(left_room, ServerHost, [ServerHost, Room, Host, JID]),
     reset_hibernate_timer(StateData#state{users = Users, nicks = Nicks}).
 
 -spec filter_presence(presence()) -> presence().

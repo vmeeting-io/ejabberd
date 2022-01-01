@@ -29,7 +29,7 @@ stop(Host) ->
     ejabberd_hooks:delete(vm_set_affiliation, Host, ?MODULE, occupant_affiliation_changed, 100).
 
 avmoderation_room_muc() ->
-    [ServerHost | _RestServers] = ejabberd_option:hosts(),
+    ServerHost = ejabberd_config:get_myname(),
     jid:make(<<"avmoderation.", ServerHost/binary>>).
 
 % -- Sends a json-message to the destination jid
@@ -100,17 +100,17 @@ notify_whitelist_change(State, JID, Moderators, Kind, Removed) ->
         if Key == <<"focus">> ->
             ok;
         Moderators == true, User#user.role == moderator ->
-            send_json_message(State#state.jid, Key, ModeratorsJsonMsg);
+            send_json_message(State#state.jid, User#user.jid, ModeratorsJsonMsg);
         Key == LJID ->
             % -- if the occupant is not moderator we send him that it is approved
             % -- if it is moderator we update him with the list, this is moderator joining or grant moderation was executed
             if User#user.role == moderator ->
-                send_json_message(State#state.jid, Key, ModeratorsJsonMsg);
+                send_json_message(State#state.jid, User#user.jid, ModeratorsJsonMsg);
             true ->
                 ParticipantJsonMsg = maps:merge(
                     ModeratorsJsonMsg,
                     #{ whitelists => null, approved => not Removed }),
-                send_json_message(State#state.jid, Key, maps:merge(
+                send_json_message(State#state.jid, User#user.jid, maps:merge(
                     ModeratorsJsonMsg,
                     #{ whitelists => null, approved => not Removed }))
             end;
@@ -185,8 +185,9 @@ process_message(#message{
                     ok;
                 OccupantToAdd ->
                     if not IsEmpty ->
+                        Whitelist1 = [JidToWhitelist | Whitelist],
                         RS3 = RoomState#state{
-                            av_moderation = [JidToWhitelist | Whitelist]
+                            av_moderation = maps:put(Kind, Whitelist1, RoomState#state.av_moderation)
                         },
                         vm_util:set_room_state_from_jid(RoomJid, RS3),
                         notify_whitelist_change(RS3, OccupantToAdd#user.jid, true, Kind, false);
@@ -204,8 +205,9 @@ process_message(#message{
                 OccupantToRemove ->
                     IsMember = lists:member(JidToBlacklist, Whitelist),
                     if not IsEmpty, IsMember ->
+                        Whitelist2 = lists:delete(JidToBlacklist, Whitelist),
                         RS4 = RoomState#state{
-                            av_moderation = lists:delete(JidToBlacklist, Whitelist)
+                            av_moderation = maps:put(Kind, Whitelist2, RoomState#state.av_moderation)
                         },
                         vm_util:set_room_state_from_jid(RoomJid, RS4),
                         notify_whitelist_change(RS4, OccupantToRemove#user.jid, true, Kind, true);
