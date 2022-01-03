@@ -200,7 +200,7 @@ on_start_room(State, _ServerHost, Room, Host) ->
     ?INFO_MSG("participant_log:on_start_room: ~ts, ~ts", [Room, Host]),
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case string:equal(Host, MucHost) of
+    case Host == MucHost orelse Host == mod_muc_breakout_rooms:breakout_room_muc() of
     true ->
         MeetingID = State#state.config#config.meeting_id,
         {SiteID, Name} = vm_util:extract_subdomain(Room),
