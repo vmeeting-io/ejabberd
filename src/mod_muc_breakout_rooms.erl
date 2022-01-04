@@ -359,7 +359,8 @@ process_message(#message{
                 _ -> not_found end;
             Result ->
                 Result
-            end;
+            end,
+
             IsModerator = Occupant /= not_found andalso Occupant#user.role == moderator,
             case {IsModerator, DType} of
             {true, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
