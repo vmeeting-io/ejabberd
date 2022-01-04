@@ -225,7 +225,7 @@ broadcast_breakout_rooms(RoomJid) ->
 
 % Managing breakout rooms
 
-create_breakout_room(RoomJid, Subject) ->
+create_breakout_room(State, RoomJid, Subject) ->
     ?INFO_MSG("create_breakout_room: ~ts, ~ts", [jid:encode(RoomJid), Subject]),
     % Breakout rooms are named like the main room with a random uuid suffix
     RoomName = RoomJid#jid.luser,
@@ -248,7 +248,8 @@ create_breakout_room(RoomJid, Subject) ->
     Url = "http://vmapi:5000/sites/" ++ binary:bin_to_list(SiteID) ++ "/conferences/",
     Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
     Headers = [{"Authorization", "Bearer " ++ Token}],
-    case httpc:request(post, {Url, Headers, ?CONTENT_TYPE, jiffy:encode(#{name => Name})}, [], []) of
+    Body = #{name => Name, main_room => State#state.room_id},
+    case httpc:request(post, {Url, Headers, ?CONTENT_TYPE, jiffy:encode(Body)}, [], []) of
     {ok, {{_, 201, _} , _Header, Rep}} ->
         Result = jiffy:decode(Rep, [return_maps]),
         RepJSON = maps:get(<<"conference">>, Result),
@@ -368,7 +369,7 @@ process_message(#message{
         case {IsModerator, DType} of
         {true, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
             Subject = maps:get(<<"subject">>, Message),
-            create_breakout_room(MainRoomJid, Subject);
+            create_breakout_room(RoomState, MainRoomJid, Subject);
         {true, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
             BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
             destroy_breakout_room(jid:decode(BreakoutRoomJid));
