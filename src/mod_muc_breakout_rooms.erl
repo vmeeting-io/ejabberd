@@ -340,11 +340,11 @@ process_message(#message{
         DType = maps:get(<<"type">>, Message),
         MainRoom = jid:decode(maps:get(<<"mainRoomJid">>, Message)),
         MainRoomJid = vm_util:room_jid_match_rewrite(MainRoom),
-        Occupant = case vm_util:get_state_from_jid(MainRoomJid) of
+        case vm_util:get_state_from_jid(MainRoomJid) of
         {ok, RoomState} ->
             LJID = jid:tolower(From),
             % find occupant in main room
-            case maps:get(LJID, RoomState#state.users, not_found) of
+            Occupant = case maps:get(LJID, RoomState#state.users, not_found) of
             not_found ->
                 % find occupant in breakout rooms
                 MainRoomStr = jid:to_string(MainRoomJid),
@@ -360,27 +360,26 @@ process_message(#message{
             Result ->
                 Result
             end;
+            IsModerator = Occupant /= not_found andalso Occupant#user.role == moderator,
+            case {IsModerator, DType} of
+            {true, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
+                Subject = maps:get(<<"subject">>, Message),
+                create_breakout_room(RoomState, MainRoomJid, Subject);
+            {true, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
+                BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
+                destroy_breakout_room(jid:decode(BreakoutRoomJid));
+            {true, ?JSON_TYPE_MOVE_TO_ROOM_REQUEST} ->
+                ParticipantRoomJid = maps:get(<<"participantJid">>, Message),
+                TargetRoomJid = maps:get(<<"roomJid">>, Message),
+                send_json_msg(ParticipantRoomJid, jiffy:encode(#{
+                    type => ?BREAKOUT_ROOMS_IDENTITY_TYPE,
+                    event => ?JSON_TYPE_MOVE_TO_ROOM_REQUEST,
+                    roomJid => TargetRoomJid }));
+            _ -> ok end;
         _ ->
             ?WARNING_MSG("~ts state not found", [jid:to_string(MainRoomJid)]),
             not_found
         end,
-
-        IsModerator = Occupant /= not_found andalso Occupant#user.role == moderator,
-        case {IsModerator, DType} of
-        {true, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
-            Subject = maps:get(<<"subject">>, Message),
-            create_breakout_room(RoomState, MainRoomJid, Subject);
-        {true, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
-            BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
-            destroy_breakout_room(jid:decode(BreakoutRoomJid));
-        {true, ?JSON_TYPE_MOVE_TO_ROOM_REQUEST} ->
-            ParticipantRoomJid = maps:get(<<"participantJid">>, Message),
-            TargetRoomJid = maps:get(<<"roomJid">>, Message),
-            send_json_msg(ParticipantRoomJid, jiffy:encode(#{
-                type => ?BREAKOUT_ROOMS_IDENTITY_TYPE,
-                event => ?JSON_TYPE_MOVE_TO_ROOM_REQUEST,
-                roomJid => TargetRoomJid }));
-        _ -> ok end,
         drop;
     _ ->
         Packet
