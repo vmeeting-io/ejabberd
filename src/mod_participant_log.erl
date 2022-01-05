@@ -8,6 +8,10 @@
 -include("mod_muc_room.hrl").
 -include("vmeeting_common.hrl").
 
+-define(SERVICE_REQUEST_TIMEOUT, 5000). % 5 seconds.
+-define(VMAPI_BASE, "http://vmapi:5000/").
+-define(CONTENT_TYPE, "application/json").
+
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
     on_broadcast_presence/4, on_leave_room/4, on_start_room/4,
@@ -57,10 +61,29 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         Name = vm_util:get_subtag_value(SubEls, <<"nick">>),
         StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
         Email = vm_util:get_subtag_value(SubEls, <<"email">>, null),
+        { RoomName, SiteID } = vm_util:split_room_and_site(State#state.room),
+
+        GetRequest = ?VMAPI_BASE ++ "sites/" 
+                ++ binary:bin_to_list(SiteID)
+                ++ "/conferences"
+                ++ "?name=" ++ binary:bin_to_list(RoomName)
+                ++ "&delete_yn=false",
+        Options = [{body_format, binary}, {full_result, false}],
+        HttpOptions = [{timeout, ?SERVICE_REQUEST_TIMEOUT}],
+
+        S1 = if State#state.room_id /= <<>> ->
+            State;
+        true -> case httpc:request(get, {GetRequest, []}, HttpOptions, Options) of
+            {ok, {Code, Resp}} when Code >= 200, Code =< 299 ->
+                Conf = lists:nth(1, jiffy:decode(Resp)),
+                RoomID = maps:get(<<"_id">>, Conf),
+                State#state{ room_id = RoomID };
+            _ -> State end
+        end,
 
         % ?INFO_MSG("on_join_room: ~ts ~ts ~ts", [Name, StatsID, Email]),
         Body = #{
-            conference => State#state.room_id,
+            conference => S1#state.room_id,
             joinTime => JoinTime,
             leaveTime => null,
             name => Name,
@@ -70,8 +93,7 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
             stats_id => StatsID
         },
 
-        Url = "http://vmapi:5000/plog/",
-        ContentType = "application/json",
+        Url = ?VMAPI_BASE ++ "plog/",
         ReqBody = jiffy:encode(Body),
 
         ReceiverFunc = fun(ReplyInfo) ->
@@ -93,12 +115,9 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
                 ?WARNING_MSG("[~p] ~p: recv http reply ~p~n", [?MODULE, ?FUNCTION_NAME, ReplyInfo])
             end
         end,
-        httpc:request(post, {Url, [], ContentType, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]);
-
-    _ -> ok
-    end,
-
-    State.
+        httpc:request(post, {Url, [], ?CONTENT_TYPE, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]),
+        S1;
+    _ -> State end.
 
 on_leave_room(_ServerHost, _Room, Host, JID) ->
     LJID = jid:tolower(JID),

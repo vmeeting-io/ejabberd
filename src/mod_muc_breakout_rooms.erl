@@ -538,10 +538,11 @@ on_start_room(State, ServerHost, Room, Host) ->
             Subject = maps:get(jid:to_string(RoomJid), Data#data.breakout_rooms, null),
             Subject1 = if Subject /= null -> [#text{data = Subject}];
                           true -> [] end,
+            BreakoutMainRoom = vm_util:internal_room_jid_match_rewrite(MainRoomJid),
             State#state{
                 subject = Subject1,
                 is_breakout = true,
-                breakout_main_room = jid:to_string(MainRoomJid),
+                breakout_main_room = jid:to_string(BreakoutMainRoom),
                 config = State#state.config#config{ persistent = true }
             };
         _ ->
