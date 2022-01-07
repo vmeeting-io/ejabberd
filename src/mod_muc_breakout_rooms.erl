@@ -484,7 +484,7 @@ on_left_room(_ServerHost, Room, Host, JID) ->
         andalso get_main_room(RoomJid) of
     {Data, MainRoomJid} when Data /= undefined ->
         ?INFO_MSG("breakout_rooms:on_left_room: ~ts@~ts, ~ts", [Room, Host, jid:encode(JID)]),
-        if Data#data.breakout_rooms_active and JID#jid.user /= <<"focus">> ->
+        if Data#data.breakout_rooms_active andalso JID#jid.user /= <<"focus">> ->
             broadcast_breakout_rooms(RoomJid);
         true -> ok end,
 

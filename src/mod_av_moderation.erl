@@ -73,11 +73,11 @@ notify_occupants_enable(State, To, Enable, ActorJid, Kind) ->
     if To /= null ->
         send_json_message(State#state.jid, To, JsonMsg);
     true ->
-        lists:foreach(fun ({Key, User}) ->
+        maps:fold(fun (Key, User, _) ->
             if Key /= <<"focus">> ->
                 send_json_message(State#state.jid, User#user.jid, JsonMsg);
             true -> ok end
-        end, maps:to_list(State#state.users))
+        end, #{}, State#state.users)
     end.
 
 % -- Notifies about a change to the whitelist. Notifies all moderators and admin and the jid itself
@@ -96,7 +96,7 @@ notify_whitelist_change(State, JID, Moderators, Kind, Removed) ->
         kind => Kind
     },
     LJID = jid:tolower(JID),
-    lists:foreach(fun ({Key, User}) ->
+    maps:fold(fun (Key, User, _) ->
         if Key == <<"focus">> ->
             ok;
         Moderators == true, User#user.role == moderator ->
@@ -117,7 +117,7 @@ notify_whitelist_change(State, JID, Moderators, Kind, Removed) ->
         true ->
             ok
         end
-    end, maps:to_list(State#state.users)).
+    end, #{}, State#state.users).
 
 % -- Notifies jid that is approved. This is a moderator to jid message to ask to unmute,
 % -- @param jid the jid to notify about the change
@@ -228,20 +228,20 @@ on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
     case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
     {true, false} when State#state.av_moderation /= #{} ->
         ?INFO_MSG("on_join_room: ~p", [State#state.av_moderation]),
-        lists:foreach(fun ({K, V}) ->
+        maps:fold(fun (K, V, _) ->
             Actor = maps:get(K, State#state.av_moderation_actors),
             notify_occupants_enable(State, JID, true, Actor, K)
-        end, maps:to_list(State#state.av_moderation)),
+        end, #{}, State#state.av_moderation),
 
         % -- NOTE for some reason event.occupant.role is not reflecting the actual occupant role (when changed
         % -- from allowners module) but iterating over room occupants returns the correct role
-        list:foreach(fun ({LJID, User}) ->
+        maps:fold(fun (LJID, User, _) ->
             % -- if moderator send the whitelist
             if User#user.nick == Nick, User#user.role == moderator ->
                 notify_whitelist_change(State, User#user.jid, false, undefined, false);
             true -> ok
             end
-        end, maps:to_list(State#state.users));
+        end, #{}, State#state.users);
     {true, false} ->
         ?INFO_MSG("on_join_room: ~p", [State#state.av_moderation]);
     _ -> ok
@@ -255,12 +255,12 @@ occupant_affiliation_changed(State, Actor, JID, Affiliation, _Reason) ->
     if Actor == true, Affiliation == owner, State#state.av_moderation /= #{} ->
         % -- event.jid is the bare jid of participant
         LJID = jid:tolower(JID),
-        lists:foreach(fun ({Key, User}) ->
+        maps:fold(fun (Key, User, _) ->
             if Key == LJID ->
                 notify_whitelist_change(State, User#user.jid, false, undefined, false);
             true -> ok
             end
-        end, maps:to_list(State#state.users));
+        end, #{}, State#state.users);
     true -> ok
     end.
 
