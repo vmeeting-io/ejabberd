@@ -225,9 +225,10 @@ on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
 
     User = JID#jid.user,
 
-    case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
+    case {string:equal(Packet#presence.to#jid.server, MucHost),
+          lists:member(User, ?WHITE_LIST_USERS)} of
     {true, false} when State#state.av_moderation /= #{} ->
-        ?INFO_MSG("on_join_room: ~p", [State#state.av_moderation]),
+        ?INFO_MSG("av_moderation:on_join_room: ~p", [State#state.av_moderation]),
         maps:fold(fun (K, V, _) ->
             Actor = maps:get(K, State#state.av_moderation_actors),
             notify_occupants_enable(State, JID, true, Actor, K)
@@ -243,7 +244,7 @@ on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
             end
         end, #{}, State#state.users);
     {true, false} ->
-        ?INFO_MSG("on_join_room: ~p", [State#state.av_moderation]);
+        ?INFO_MSG("av_moderation:on_join_room: ~p", [State#state.av_moderation]);
     _ -> ok
     end,
     State.

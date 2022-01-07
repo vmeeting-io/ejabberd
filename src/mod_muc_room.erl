@@ -1639,6 +1639,10 @@ do_get_affiliation(JID, StateData) ->
 	if is_pid(StateData#state.main_room_pid) ->
 		{ok, MainRoomState} = get_state(StateData#state.main_room_pid),
 		get_affiliation(JID, MainRoomState);
+	StateData#state.breakout_main_room /= <<"">> ->
+		MainRoomJid = jid:decode(StateData#state.breakout_main_room),
+		{ok, MainRoomState} = vm_util:get_state_from_jid(MainRoomJid),
+		get_affiliation(JID, MainRoomState);
 	true ->
 		Room = StateData#state.room,
 		Host = StateData#state.host,
