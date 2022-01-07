@@ -288,7 +288,7 @@ destroy_breakout_room(RoomJid, Message) ->
                 }
             }),
 
-            {Name, SiteID} = vm_util:split_room_and_site(RoomJid#jid.luser),
+            {_, SiteID} = vm_util:split_room_and_site(MainJid#jid.luser),
             Url = "http://vmapi:5000/sites/"
                 ++ binary:bin_to_list(SiteID)
                 ++ "/conferences/"
@@ -299,7 +299,7 @@ destroy_breakout_room(RoomJid, Message) ->
 
             broadcast_breakout_rooms(MainJid),
             case vm_util:get_room_pid_from_jid(RoomJid) of
-            RoomPid when RoomPid /= room_not_found andalso RoomPid /= invalid_service ->
+            RoomPid when is_pid(RoomPid) ->
                 mod_muc_admin:change_room_option(RoomPid, persistent, false),
                 mod_muc_room:destroy(RoomPid, Message);
             _ ->
@@ -458,9 +458,9 @@ destroy_main_room(RoomJid) ->
     timeout ->
         case ets:lookup(vm_breakout_rooms, jid:to_string(RoomJid)) of
         [{_, Data}] ->
-            if Data#data.is_close_all_scheduled ->
-                ?INFO_MSG("Closing conference ~ts as all left for good.", [jid:encode(RoomJid)]),
-                Pid = vm_util:get_room_pid_from_jid(RoomJid),
+            ?INFO_MSG("Closing conference ~ts as all left for good.", [jid:encode(RoomJid)]),
+            Pid = vm_util:get_room_pid_from_jid(RoomJid),
+            if Data#data.is_close_all_scheduled andalso is_pid(Pid) ->
                 mod_muc_admin:change_room_option(Pid, persistent, false),
                 mod_muc_room:destroy(Pid, <<"All occupants left.">>);
             true ->
