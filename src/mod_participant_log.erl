@@ -39,14 +39,20 @@ stop(Host) ->
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
+is_valid_node(Room, Host) ->
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+
+    not vm_util:is_healthcheck_room(Room) andalso
+    (Host == MucHost orelse Host == mod_muc_breakout_rooms:breakout_room_muc()).
+
 on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [_RoomID, Nick]),
 
     User = JID#jid.user,
-
-    case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
-    {true, false} ->
+    #jid{ lserver = Host, luser = Room } = Packet#presence.to,
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         % ?INFO_MSG("mod_participant_log:joined ~ts", [jid:to_string(JID)]),
         {{Year, Month, Day}, {Hour, Min, Sec}} = erlang:localtime(),
         JoinTime = #{year => Year,
@@ -119,13 +125,13 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         S1;
     _ -> State end.
 
-on_leave_room(_ServerHost, _Room, Host, JID) ->
+on_leave_room(_ServerHost, Room, Host, JID) ->
     LJID = jid:tolower(JID),
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     User = JID#jid.user,
 
-    case {string:equal(Host, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
-    {true, false} ->
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         case ets:lookup(vm_users, LJID) of
         [{LJID, VMUser}] ->
             VMUserID = maps:get(id, VMUser),
@@ -140,13 +146,12 @@ on_leave_room(_ServerHost, _Room, Host, JID) ->
     end.
 
 on_broadcast_presence(_ServerHost, State,
-                        #presence{to = To, type = PresenceType, status = [], sub_els = SubEls},
+                        #presence{to = To, type = available, status = [], sub_els = SubEls},
                         #jid{user = User} = JID) ->
-    IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
-    {false, available, true} ->
+    #jid{lserver = Host, luser = Room} = To,
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         LJID = jid:tolower(JID),
 
         case ets:lookup(vm_users, LJID) of
@@ -173,13 +178,12 @@ on_broadcast_presence(_ServerHost, State,
     _ -> ok
     end;
 on_broadcast_presence(_ServerHost, State,
-                        #presence{to = To, type = PresenceType, status = [Status], sub_els = SubEls},
+                        #presence{to = To, type = available, status = [Status], sub_els = SubEls},
                         #jid{user = User} = JID) ->
-    IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
-    {false, available, true} ->
+    #jid{lserver = Host, luser = Room} = To,
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         LJID = jid:tolower(JID),
 
         case ets:lookup(vm_users, LJID) of
@@ -213,13 +217,14 @@ on_broadcast_presence(_ServerHost, State,
         end;
 
     _ -> ok
-    end.
+    end;
+on_broadcast_presence(_ServerHost, _State, _Packet, _JID) ->
+    ok.
 
 on_start_room(State, _ServerHost, Room, Host) ->
     ?INFO_MSG("participant_log:on_start_room: ~ts, ~ts", [Room, Host]),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case Host == MucHost orelse Host == mod_muc_breakout_rooms:breakout_room_muc() of
+    case is_valid_node(Room, Host) of
     true ->
         MeetingID = State#state.config#config.meeting_id,
         {SiteID, Name} = vm_util:extract_subdomain(Room),
@@ -245,9 +250,8 @@ on_start_room(State, _ServerHost, Room, Host) ->
 
 on_room_destroyed(State, _ServerHost, Room, Host) ->
     ?INFO_MSG("participant_log:on_room_destroyed: ~ts, ~ts", [Room, Host]),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case string:equal(Host, MucHost) of
+    case is_valid_node(Room, Host) of
     true ->
         % TODO: check if the room name start with __jicofo-health-check
         {SiteID, _} = vm_util:extract_subdomain(Room),

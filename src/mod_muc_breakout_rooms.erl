@@ -80,6 +80,12 @@ breakout_room_muc() ->
     ServerHost = ejabberd_config:get_myname(),
     <<"breakout.", ServerHost/binary>>.
 
+is_valid_node(Room, Host) ->
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+
+    not vm_util:is_healthcheck_room(Room) andalso
+    (Host == MucHost orelse Host == breakout_room_muc()).
+
 send_timeout(Time, Func, Args) ->
     Pid = spawn(?MODULE, Func, Args),
     erlang:send_after(Time, Pid, timeout).
@@ -313,7 +319,7 @@ destroy_breakout_room(RoomJid, Message) ->
     end.
 
 destroy_breakout_room(RoomJid) ->
-    destroy_breakout_room(RoomJid, <<"Breakout room removed.">>).
+    destroy_breakout_room(RoomJid, <<"destroyed_by_host">>).
 
 find_user_by_nick(Nick, StateData) ->
     try maps:get(Nick, StateData#state.nicks) of
@@ -390,13 +396,8 @@ process_message(Packet) ->
 
 on_join_room(_ServerHost, Room, Host, From) ->
     RoomJid = jid:make(Room, Host),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
-    BreakoutHost = breakout_room_muc(),
-    IsValidHost = Host == MucHost orelse Host == BreakoutHost,
 
-    case not vm_util:is_healthcheck_room(Room)
-        andalso IsValidHost
-        andalso get_main_room(RoomJid) of
+    case is_valid_node(Room, Host) andalso get_main_room(RoomJid) of
     {Data, MainJid}
         when Data /= undefined andalso Data#data.breakout_rooms_active == true ->
         ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
@@ -475,13 +476,8 @@ destroy_main_room(RoomJid) ->
 
 on_left_room(_ServerHost, Room, Host, JID) ->
     RoomJid = jid:make(Room, Host),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
-    BreakoutHost = breakout_room_muc(),
-    IsValidHost = Host == MucHost orelse Host == BreakoutHost,
 
-    case not vm_util:is_healthcheck_room(Room)
-        andalso IsValidHost
-        andalso get_main_room(RoomJid) of
+    case is_valid_node(Room, Host) andalso get_main_room(RoomJid) of
     {Data, MainRoomJid} when Data /= undefined ->
         ?INFO_MSG("breakout_rooms:on_left_room: ~ts@~ts, ~ts", [Room, Host, jid:encode(JID)]),
         if Data#data.breakout_rooms_active andalso JID#jid.user /= <<"focus">> ->
@@ -495,7 +491,13 @@ on_left_room(_ServerHost, Room, Host, JID) ->
            and not ExistOccupantsInRooms ->
             ets:insert(vm_breakout_rooms, {
                 jid:to_string(MainRoomJid),
-                Data#data{ is_close_all_scheduled = true }
+                Data#data{
+                    breakout_rooms_counter = 0,
+                    breakout_rooms = #{},
+                    breakout_rooms_active = false,
+                    breakout_rooms_info = #{},
+                    is_close_all_scheduled = true
+                }
             }),
             send_timeout(
                 ?ROOMS_TTL_IF_ALL_LEFT,
@@ -530,25 +532,22 @@ on_check_create_room(Acc, ServerHost, Room, Host) when Acc == true ->
 
 on_start_room(State, ServerHost, Room, Host) ->
     ?INFO_MSG("breakout_rooms:on_start_room: ~ts, ~ts", [Room, Host]),
-    BreakoutHost = breakout_room_muc(),
-    if BreakoutHost == Host ->
-        RoomJid = jid:make(Room, Host),
-        case get_main_room(RoomJid) of
-        { Data, MainRoomJid } when Data /= undefined ->
-            Subject = maps:get(jid:to_string(RoomJid), Data#data.breakout_rooms, null),
-            Subject1 = if Subject /= null -> [#text{data = Subject}];
-                          true -> [] end,
-            BreakoutMainRoom = vm_util:internal_room_jid_match_rewrite(MainRoomJid),
-            State#state{
-                subject = Subject1,
-                is_breakout = true,
-                breakout_main_room = jid:to_string(BreakoutMainRoom),
-                config = State#state.config#config{ persistent = true }
-            };
-        _ ->
-            State
-        end;
-    true -> State
+
+    RoomJid = jid:make(Room, Host),
+    case Host == breakout_room_muc() andalso get_main_room(RoomJid) of
+    { Data, MainRoomJid } when Data /= undefined ->
+        Subject = maps:get(jid:to_string(RoomJid), Data#data.breakout_rooms, null),
+        Subject1 = if Subject /= null -> [#text{data = Subject}];
+                        true -> [] end,
+        BreakoutMainRoom = vm_util:internal_room_jid_match_rewrite(MainRoomJid),
+        State#state{
+            subject = Subject1,
+            is_breakout = true,
+            breakout_main_room = jid:to_string(BreakoutMainRoom),
+            config = State#state.config#config{ persistent = true }
+        };
+    _ ->
+        State
     end.
 
 on_room_destroyed(_State, _ServerHost, Room, Host) ->
@@ -556,9 +555,9 @@ on_room_destroyed(_State, _ServerHost, Room, Host) ->
     ?INFO_MSG("breakout_rooms:on_room_destroyed => ~ts", [RoomJid]),
 
     BreakoutHost = breakout_room_muc(),
-    case {vm_util:is_healthcheck_room(Room),
-          ets:lookup(vm_breakout_rooms, RoomJid)} of
-    {false, [{_, Data}]} ->
+    case not vm_util:is_healthcheck_room(Room)
+         andalso ets:lookup(vm_breakout_rooms, RoomJid) of
+    [{_, Data}] ->
         Message = <<"Conference ended.">>,
         maps:fold(fun(K, _, _) ->
             destroy_breakout_room(jid:decode(K), Message)
