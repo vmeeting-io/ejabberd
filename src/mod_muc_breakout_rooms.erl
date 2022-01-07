@@ -343,7 +343,6 @@ process_message(#message{
         Message = jiffy:decode(JsonMessage, [return_maps]),
         ?INFO_MSG("decoded message: ~p, from: ~ts, to: ~ts", [Message, jid:encode(From), jid:encode(To)]),
 
-        DType = maps:get(<<"type">>, Message),
         MainRoom = jid:decode(maps:get(<<"mainRoomJid">>, Message)),
         MainRoomJid = vm_util:room_jid_match_rewrite(MainRoom),
         case vm_util:get_state_from_jid(MainRoomJid) of
@@ -368,14 +367,14 @@ process_message(#message{
             end,
 
             IsModerator = Occupant /= not_found andalso Occupant#user.role == moderator,
-            case {IsModerator, DType} of
-            {true, ?JSON_TYPE_ADD_BREAKOUT_ROOM} ->
+            case IsModerator andalso maps:get(<<"type">>, Message) of
+            ?JSON_TYPE_ADD_BREAKOUT_ROOM ->
                 Subject = maps:get(<<"subject">>, Message),
                 create_breakout_room(RoomState, MainRoomJid, Subject);
-            {true, ?JSON_TYPE_REMOVE_BREAKOUT_ROOM} ->
+            ?JSON_TYPE_REMOVE_BREAKOUT_ROOM ->
                 BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
                 destroy_breakout_room(jid:decode(BreakoutRoomJid));
-            {true, ?JSON_TYPE_MOVE_TO_ROOM_REQUEST} ->
+            ?JSON_TYPE_MOVE_TO_ROOM_REQUEST ->
                 ParticipantRoomJid = maps:get(<<"participantJid">>, Message),
                 TargetRoomJid = maps:get(<<"roomJid">>, Message),
                 send_json_msg(ParticipantRoomJid, jiffy:encode(#{
@@ -396,11 +395,10 @@ process_message(Packet) ->
 
 on_join_room(_ServerHost, Room, Host, From) ->
     RoomJid = jid:make(Room, Host),
+    ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
 
     case is_valid_node(Room, Host) andalso get_main_room(RoomJid) of
-    {Data, MainJid}
-        when Data /= undefined andalso Data#data.breakout_rooms_active == true ->
-        ?INFO_MSG("breakout_rooms:on_join_room: ~ts, ~ts", [jid:encode(RoomJid), jid:encode(From)]),
+    {Data, MainJid} when Data /= undefined andalso Data#data.breakout_rooms_active == true ->
         if From#jid.user /= <<"focus">> ->
             broadcast_breakout_rooms(RoomJid);
         true -> ok end,
@@ -462,6 +460,10 @@ destroy_main_room(RoomJid) ->
             ?INFO_MSG("Closing conference ~ts as all left for good.", [jid:encode(RoomJid)]),
             Pid = vm_util:get_room_pid_from_jid(RoomJid),
             if Data#data.is_close_all_scheduled andalso is_pid(Pid) ->
+                ets:insert(vm_breakout_rooms, {
+                    jid:to_string(RoomJid),
+                    Data#data{ is_close_all_scheduled = false }
+                }),
                 mod_muc_admin:change_room_option(Pid, persistent, false),
                 mod_muc_room:destroy(Pid, <<"All occupants left.">>);
             true ->
@@ -492,10 +494,6 @@ on_left_room(_ServerHost, Room, Host, JID) ->
             ets:insert(vm_breakout_rooms, {
                 jid:to_string(MainRoomJid),
                 Data#data{
-                    breakout_rooms_counter = 0,
-                    breakout_rooms = #{},
-                    breakout_rooms_active = false,
-                    breakout_rooms_info = #{},
                     is_close_all_scheduled = true
                 }
             }),
@@ -555,13 +553,21 @@ on_room_destroyed(_State, _ServerHost, Room, Host) ->
     ?INFO_MSG("breakout_rooms:on_room_destroyed => ~ts", [RoomJid]),
 
     BreakoutHost = breakout_room_muc(),
-    case not vm_util:is_healthcheck_room(Room)
-         andalso ets:lookup(vm_breakout_rooms, RoomJid) of
+    case not vm_util:is_healthcheck_room(Room) andalso ets:lookup(vm_breakout_rooms, RoomJid) of
     [{_, Data}] ->
         Message = <<"Conference ended.">>,
         maps:fold(fun(K, _, _) ->
             destroy_breakout_room(jid:decode(K), Message)
-        end, ok, Data#data.breakout_rooms);
+        end, ok, Data#data.breakout_rooms),
+        ets:insert(vm_breakout_rooms, {
+            RoomJid,
+            Data#data{
+                breakout_rooms_counter = 0,
+                breakout_rooms = #{},
+                breakout_rooms_active = false,
+                breakout_rooms_info = #{}
+            }
+        });
     _ when Host == BreakoutHost ->
         destroy_breakout_room(jid:decode(RoomJid));
     _ ->

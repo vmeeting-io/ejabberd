@@ -240,7 +240,8 @@ on_start_room(State, _ServerHost, Room, Host) ->
         {ok, {{_, 201, _} , _Header, Rep}} ->
             RepJSON = jiffy:decode(Rep, [return_maps]),
             RoomID = maps:get(<<"_id">>, RepJSON),
-            State1 = State#state{room_id = RoomID},
+            FaceDetect = maps:get(<<"face_detect">>, RepJSON, false),
+            State1 = State#state{room_id = RoomID, face_detect = FaceDetect},
             State1;
 
         {_, _Rep} -> State
