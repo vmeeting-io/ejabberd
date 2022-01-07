@@ -60,7 +60,7 @@ find_user_by_nick(Nick, StateData) ->
 % -- @param actorJid the jid that is performing the enable/disable operation (the muc jid)
 % -- @param mediaType the media type for the moderation
 notify_occupants_enable(State, To, Enable, ActorJid, Kind) ->
-    ?INFO_MSG("notify_occupants_enabled: ~p, ~p, ~p, ~p", [To, Enable, ActorJid, Kind]),
+    ?INFO_MSG("notify_occupants_enable: ~p, ~p, ~p, ~p", [To, Enable, ActorJid, Kind]),
     RoomJid = vm_util:internal_room_jid_match_rewrite(State#state.jid),
     JsonMsg = #{
         type => <<"av_moderation">>,
