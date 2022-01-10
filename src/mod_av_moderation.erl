@@ -32,6 +32,12 @@ avmoderation_room_muc() ->
     ServerHost = ejabberd_config:get_myname(),
     jid:make(<<"avmoderation.", ServerHost/binary>>).
 
+is_valid_node(Room, Host) ->
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+
+    not vm_util:is_healthcheck_room(Room) andalso
+    (Host == MucHost orelse Host == mod_muc_breakout_rooms:breakout_room_muc()).
+
 % -- Sends a json-message to the destination jid
 % -- @param to_jid the destination jid
 % -- @param json_message the message content to send
@@ -221,13 +227,12 @@ process_message(Packet) ->
     Packet.
 
 on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
-
     User = JID#jid.user,
+    #jid{ lserver = Host, luser = Room } = Packet#presence.to,
 
-    case {string:equal(Packet#presence.to#jid.server, MucHost),
-          lists:member(User, ?WHITE_LIST_USERS)} of
-    {true, false} when State#state.av_moderation /= #{} ->
+    case is_valid_node(Room, Host) andalso
+         not lists:member(User, ?WHITE_LIST_USERS) of
+    true when State#state.av_moderation /= #{} ->
         ?INFO_MSG("av_moderation:on_join_room: ~p", [State#state.av_moderation]),
         maps:fold(fun (K, V, _) ->
             Actor = maps:get(K, State#state.av_moderation_actors),
@@ -243,9 +248,8 @@ on_join_room(State, ServerHost, Packet, JID, _Room, Nick) ->
             true -> ok
             end
         end, #{}, State#state.users);
-    {true, false} ->
-        ?INFO_MSG("av_moderation:on_join_room: ~p", [State#state.av_moderation]);
-    _ -> ok
+    _ ->
+        ok
     end,
     State.
 

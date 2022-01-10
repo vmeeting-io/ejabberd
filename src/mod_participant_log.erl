@@ -135,7 +135,7 @@ on_leave_room(_ServerHost, Room, Host, JID) ->
         case ets:lookup(vm_users, LJID) of
         [{LJID, VMUser}] ->
             VMUserID = maps:get(id, VMUser),
-            Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+            Url = ?VMAPI_BASE ++ "plog/" ++ binary:bin_to_list(VMUserID),
             httpc:request(delete, {Url, [], [], []}, [], [{sync, false}]),
 
             ets:delete(vm_users, LJID);
@@ -163,9 +163,9 @@ on_broadcast_presence(_ServerHost, State,
 
             if VMUserName /= Name ->
                 httpc:request(patch, {
-                    "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+                    ?VMAPI_BASE ++ "plog/" ++ binary:bin_to_list(VMUserID),
                     [],
-                    "application/json",
+                    ?CONTENT_TYPE,
                     jiffy:encode(#{name => Name})
                 }, [], [{sync, false}]),
                 ets:insert(vm_users, {LJID, VMUser#{name => Name}});
@@ -229,7 +229,7 @@ on_start_room(State, _ServerHost, Room, Host) ->
         MeetingID = State#state.config#config.meeting_id,
         {SiteID, Name} = vm_util:extract_subdomain(Room),
 
-        Url = "http://vmapi:5000/sites/"
+        Url = ?VMAPI_BASE ++ "sites/"
                 ++ binary:bin_to_list(SiteID)
                 ++ "/conferences",
         ContentType = "application/x-www-form-urlencoded",
@@ -258,7 +258,7 @@ on_room_destroyed(State, _ServerHost, Room, Host) ->
         {SiteID, _} = vm_util:extract_subdomain(Room),
         RoomID = State#state.room_id,
 
-        Url = "http://vmapi:5000/sites/"
+        Url = ?VMAPI_BASE ++ "sites/"
                 ++ binary:bin_to_list(SiteID)
                 ++ "/conferences/"
                 ++ binary:bin_to_list(RoomID),

@@ -16,6 +16,7 @@
 
 -define(BROADCAST_ROOMS_INTERVAL, 300).
 -define(ROOMS_TTL_IF_ALL_LEFT, 5000).
+-define(VMAPI_BASE, "http://vmapi:5000/").
 -define(CONTENT_TYPE, "application/json").
 -define(BREAKOUT_ROOMS_IDENTITY_TYPE, <<"breakout_rooms">>).
 -define(JSON_TYPE_ADD_BREAKOUT_ROOM, <<"features/breakout-rooms/add">>).
@@ -27,8 +28,8 @@
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_doc/0,
     process_message/1, on_start_room/4, on_room_destroyed/4, disco_local_identity/5,
-    on_join_room/4, on_left_room/4, on_check_create_room/4,
-    destroy_main_room/1, update_breakout_rooms/1, breakout_room_muc/0]).
+    on_kick_participant/3, on_join_room/4, on_left_room/4, on_check_create_room/4,
+    on_filter_presence/3, destroy_main_room/1, update_breakout_rooms/1, breakout_room_muc/0]).
 
 -record(data,
 {
@@ -49,6 +50,8 @@ start(Host, _Opts) ->
         _:badarg -> ok
     end,
 
+    ejabberd_hooks:add(muc_filter_presence, Host, ?MODULE, on_filter_presence, 100),
+    ejabberd_hooks:add(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:add(join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:add(left_room, Host, ?MODULE, on_left_room, 100),
@@ -58,6 +61,8 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(filter_packet, ?MODULE, process_message, 100).
 
 stop(Host) ->
+    ejabberd_hooks:delete(muc_filter_presence, Host, ?MODULE, on_filter_presence, 100),
+    ejabberd_hooks:delete(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:delete(join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:delete(left_room, Host, ?MODULE, on_left_room, 100),
@@ -251,10 +256,14 @@ create_breakout_room(State, RoomJid, Subject) ->
     end,
 
     {Name, SiteID} = vm_util:split_room_and_site(BreakoutRoom),
-    Url = "http://vmapi:5000/sites/" ++ binary:bin_to_list(SiteID) ++ "/conferences/",
+    Url = ?VMAPI_BASE ++ "sites/" ++ binary:bin_to_list(SiteID) ++ "/conferences/",
     Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
     Headers = [{"Authorization", "Bearer " ++ Token}],
-    Body = #{name => Name, main_room => State#state.room_id},
+    Body = #{
+        name => Name,
+        main_room => State#state.room_id,
+        subject => Subject
+    },
     case httpc:request(post, {Url, Headers, ?CONTENT_TYPE, jiffy:encode(Body)}, [], []) of
     {ok, {{_, 201, _} , _Header, Rep}} ->
         Result = jiffy:decode(Rep, [return_maps]),
@@ -273,6 +282,36 @@ create_breakout_room(State, RoomJid, Subject) ->
         % mod_muc_admin:create_room(BreakoutRoom, breakout_room_muc(), ServerHost);
     Err ->
         ?INFO_MSG("create_breakout_room: failed ~p", [Err]),
+        ok
+    end.
+
+update_breakout_room(RoomJid, Subject) ->
+    RoomStr = jid:to_string(RoomJid),
+    ?INFO_MSG("update_breakout_room: ~p", [RoomStr]),
+
+    case get_main_room(RoomJid) of
+    { Data, MainJid } when MainJid /= RoomJid andalso Data /= undefined ->
+        #data{breakout_rooms = Rooms, breakout_rooms_info = Info} = Data,
+        case maps:get(RoomStr, Info, not_found) of
+        not_found -> ok;
+        #{ <<"_id">> := RoomID } ->
+            ets:insert(vm_breakout_rooms, {
+                jid:to_string(MainJid),
+                Data#data{ breakout_rooms = maps:put(RoomStr, Subject, Rooms) }}),
+            {_, SiteID} = vm_util:split_room_and_site(MainJid#jid.luser),
+            Url = ?VMAPI_BASE ++ "sites/"
+                ++ binary:bin_to_list(SiteID) ++ "/conferences"
+                ++ binary:bin_to_list(RoomID),
+            Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
+            Headers = [{"Authorization", "Bearer " ++ Token}],
+            ReqBody = uri_string:compose_query([{"subject", Subject}]),
+            httpc:request(patch, {Url, Headers, ?CONTENT_TYPE, ReqBody}, [], [{sync, false}]),
+
+            broadcast_breakout_rooms(MainJid);
+        _ ->
+            ?INFO_MSG("no matching: ~p", Info)
+        end;
+    _ ->
         ok
     end.
 
@@ -295,7 +334,7 @@ destroy_breakout_room(RoomJid, Message) ->
             }),
 
             {_, SiteID} = vm_util:split_room_and_site(MainJid#jid.luser),
-            Url = "http://vmapi:5000/sites/"
+            Url = ?VMAPI_BASE ++ "sites/"
                 ++ binary:bin_to_list(SiteID)
                 ++ "/conferences/"
                 ++ binary:bin_to_list(RoomID),
@@ -355,10 +394,10 @@ process_message(#message{
                 MainRoomStr = jid:to_string(MainRoomJid),
                 case ets:lookup(vm_breakout_rooms, MainRoomStr) of
                 [{_, Data}] ->
-                    maps:fold(fun (K, not_found, Acc) ->
+                    maps:fold(fun (K, _, Acc) ->
                         case {Acc, vm_util:get_state_from_jid(jid:decode(K))} of
                         {not_found, {ok, BRS}} ->
-                            map:get(LJID, BRS#state.users, not_found);
+                            maps:get(LJID, BRS#state.users, not_found);
                         _ -> Acc end
                     end, not_found, Data#data.breakout_rooms);
                 _ -> not_found end;
@@ -381,6 +420,10 @@ process_message(#message{
                     type => ?BREAKOUT_ROOMS_IDENTITY_TYPE,
                     event => ?JSON_TYPE_MOVE_TO_ROOM_REQUEST,
                     roomJid => TargetRoomJid }));
+            ?JSON_TYPE_UPDATE_BREAKOUT_ROOMS ->
+                BreakoutRoomJid = maps:get(<<"breakoutRoomJid">>, Message),
+                Subject = maps:get(<<"subject">>, Message),
+                update_breakout_room(jid:decode(BreakoutRoomJid), Subject);
             _ -> ok end;
         _ ->
             ?WARNING_MSG("~ts state not found", [jid:to_string(MainRoomJid)]),
@@ -410,7 +453,11 @@ on_join_room(_ServerHost, Room, Host, From) ->
                 Key, Data#data{ is_close_all_scheduled = false }
             });
         true -> ok end;
-    _ -> ok end.
+    {Data, _} ->
+        ?INFO_MSG("breakout_rooms:on_join_room: ~p", [Data]);
+    _ ->
+        ok
+    end.
 
 exist_occupants_in_room(RoomJid) ->
     {LUser, LServer, _} = jid:tolower(RoomJid),
@@ -574,3 +621,43 @@ on_room_destroyed(_State, _ServerHost, Room, Host) ->
         ?INFO_MSG("~ts breakout_rooms not found.", [RoomJid]),
         ok
     end.
+
+on_kick_participant(Ujid, Jid, State) ->
+    #jid{luser = Room, lserver = Host} = RoomJid = State#state.jid,
+    ?INFO_MSG("breakout_rooms:on_kick_participant => ~ts", [jid:to_string(RoomJid)]),
+    case is_valid_node(Room, Host) andalso get_main_room(RoomJid) of
+    {Data, MainJid} when Data /= undefined andalso Data#data.breakout_rooms_active ->
+        broadcast_breakout_rooms(MainJid);
+    _ ->
+        ok
+    end.
+
+on_filter_presence(#presence{
+        to = To, from = #jid{user = User} = From, type = available, sub_els = SubEls
+    } = Packet,
+    State, Nick) ->
+
+    #jid{lserver = Host, luser = Room} = To,
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
+        RoomJid = jid:make(Room, Host),
+        LJID = jid:tolower(From),
+
+        Name = vm_util:get_subtag_value(SubEls, <<"nick">>, false),
+        OldName = case get_main_room(RoomJid) of
+        {Data, _} when Data /= undefined andalso Data#data.breakout_rooms_active ->
+            V = maps:get(LJID, State#state.users, false),
+            N = V /= false andalso vm_util:get_subtag_value(
+                            (V#user.last_presence)#presence.sub_els,
+                            <<"nick">>),
+            ?INFO_MSG("breakout_rooms:on_filter_presence ~ts ~ts", [Name, N]),
+            N;
+        _ -> Name end,
+
+        if Name /= false andalso OldName /= false andalso Name /= OldName ->
+            broadcast_breakout_rooms(RoomJid);
+        true -> ok end;
+    _ -> ok end,
+    Packet;
+on_filter_presence(Packet, _State, _Nick) ->
+    Packet.
