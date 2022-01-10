@@ -300,11 +300,11 @@ update_breakout_room(RoomJid, Subject) ->
                 Data#data{ breakout_rooms = maps:put(RoomStr, Subject, Rooms) }}),
             {_, SiteID} = vm_util:split_room_and_site(MainJid#jid.luser),
             Url = ?VMAPI_BASE ++ "sites/"
-                ++ binary:bin_to_list(SiteID) ++ "/conferences"
+                ++ binary:bin_to_list(SiteID) ++ "/conferences/"
                 ++ binary:bin_to_list(RoomID),
             Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
             Headers = [{"Authorization", "Bearer " ++ Token}],
-            ReqBody = uri_string:compose_query([{"subject", Subject}]),
+            ReqBody = jiffy:encode(#{subject => Subject}),
             httpc:request(patch, {Url, Headers, ?CONTENT_TYPE, ReqBody}, [], [{sync, false}]),
 
             broadcast_breakout_rooms(MainJid);
