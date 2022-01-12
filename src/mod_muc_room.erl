@@ -1637,12 +1637,20 @@ do_get_affiliation(JID, #state{config = #config{persistent = false}} = StateData
 do_get_affiliation(JID, StateData) ->
 	% if this is lobbyroom, get affiliation from main room
 	if is_pid(StateData#state.main_room_pid) ->
-		{ok, MainRoomState} = get_state(StateData#state.main_room_pid),
-		get_affiliation(JID, MainRoomState);
+		case get_state(StateData#state.main_room_pid) of
+		{ok, MainRoomState} ->
+			get_affiliation(JID, MainRoomState);
+		_ ->
+			do_get_affiliation_fallback(JID, StateData)
+		end;
 	StateData#state.breakout_main_room /= <<"">> ->
 		MainRoomJid = jid:decode(StateData#state.breakout_main_room),
-		{ok, MainRoomState} = vm_util:get_state_from_jid(MainRoomJid),
-		get_affiliation(JID, MainRoomState);
+		case vm_util:get_state_from_jid(MainRoomJid) of
+		{ok, MainRoomState} ->
+			get_affiliation(JID, MainRoomState);
+		_ ->
+			do_get_affiliation_fallback(JID, StateData)
+		end;
 	true ->
 		Room = StateData#state.room,
 		Host = StateData#state.host,

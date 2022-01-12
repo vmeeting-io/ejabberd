@@ -81,9 +81,15 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
             State;
         true -> case httpc:request(get, {GetRequest, []}, HttpOptions, Options) of
             {ok, {Code, Resp}} when Code >= 200, Code =< 299 ->
-                Conf = lists:nth(1, jiffy:decode(Resp)),
-                RoomID = maps:get(<<"_id">>, Conf),
-                State#state{ room_id = RoomID };
+                try element(2, lists:nth(1, element(1,jiffy:decode(Resp)))) of
+                Docs -> 
+                    try lists:nth(1, Docs) of
+                    Conf ->
+                        try maps:get(<<"_id">>, Conf) of
+                        RoomID -> State#state{ room_id = RoomID }
+                        catch _:_ -> State end
+                    catch _:_ -> State end
+                catch _:_ -> State end;
             _ -> State end
         end,
 
