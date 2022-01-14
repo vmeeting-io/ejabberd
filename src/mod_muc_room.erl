@@ -46,6 +46,7 @@
 	 shutdown/1,
 	 get_config/1,
 	 set_config/2,
+	 get_owners/1,
 	 get_state/1,
 	 set_state/2,
 	 change_item/5,
@@ -1553,16 +1554,16 @@ expulse_participant(Packet, From, StateData, Reason1) ->
     end,
     remove_online_user(From, NewState).
 
-% -spec get_owners(state()) -> [jid:jid()].
-% get_owners(StateData) ->
-%     maps:fold(
-%        fun(LJID, owner, Acc) ->
-% 	       [jid:make(LJID)|Acc];
-% 	  (LJID, {owner, _}, Acc) ->
-% 	       [jid:make(LJID)|Acc];
-% 	  (_, _, Acc) ->
-% 	       Acc
-%        end, [], StateData#state.affiliations).
+-spec get_owners(state()) -> [jid:jid()].
+get_owners(StateData) ->
+    maps:fold(
+       fun(LJID, owner, Acc) ->
+	       [jid:make(LJID)|Acc];
+	   (LJID, {owner, _}, Acc) ->
+	       [jid:make(LJID)|Acc];
+	   (_, _, Acc) ->
+	       Acc
+       end, [], StateData#state.affiliations).
 
 -spec set_affiliation(jid(), affiliation(), state()) -> state().
 set_affiliation(JID, Affiliation, StateData) ->

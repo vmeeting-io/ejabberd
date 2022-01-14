@@ -13,9 +13,18 @@
 -define(CONTENT_TYPE, "application/json").
 
 %% gen_mod API callbacks
--export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
-    on_broadcast_presence/4, on_leave_room/4, on_start_room/4,
-    on_room_destroyed/4, mod_doc/0]).
+-export([
+    depends/2,
+    mod_doc/0,
+    mod_options/1,
+    on_broadcast_presence/4,
+    on_join_room/6,
+    on_leave_room/4,
+    on_room_destroyed/4,
+    on_start_room/4,
+    start/2,
+    stop/1
+]).
 
 start(Host, _Opts) ->
     ?INFO_MSG("muc_participant_log:start ~ts", [Host]),
@@ -204,7 +213,7 @@ on_broadcast_presence(_ServerHost, State,
                 MeetingID = State#state.config#config.meeting_id,
                 NewStatus = Status#text.data,
                 httpc:request(post, {
-                    "http://vmapi:5000/attentions/",
+                    ?VMAPI_BASE ++ "attentions/",
                     [],
                     "application/json",
                     jiffy:encode(#{
