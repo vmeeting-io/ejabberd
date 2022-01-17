@@ -673,22 +673,21 @@ on_filter_presence(#presence{
         LJID = jid:tolower(From),
 
         Name = vm_util:get_subtag_value(SubEls, <<"nick">>, false),
-        OldName = try get_main_room(RoomJid) of
+        try get_main_room(RoomJid) of
         {Data, _} when Data#data.breakout_rooms_active ->
-            try maps:get(LJID, State#state.users) of
-            V ->
-                N = vm_util:get_subtag_value(
-                        (V#user.last_presence)#presence.sub_els,
-                        <<"nick">>),
-                ?INFO_MSG("breakout_rooms:on_filter_presence ~ts ~ts", [Name, N]),
-                N
-            catch _:{badkey, _} -> Name end;
-        _ -> Name
-        catch _:_ -> Name end,
+            OldName = try maps:get(LJID, State#state.users) of
+            Found ->
+                vm_util:get_subtag_value(
+                    (Found#user.last_presence)#presence.sub_els,
+                    <<"nick">>)
+            catch _:{badkey, _} -> Name end,
+            ?INFO_MSG("breakout_rooms:on_filter_presence ~ts ~ts", [Name, OldName]),
 
-        if Name /= false andalso Name /= OldName ->
-            broadcast_breakout_rooms(RoomJid);
-        true -> ok end;
+            if Name /= false andalso Name /= OldName ->
+                broadcast_breakout_rooms(RoomJid);
+            true -> ok end;
+        _ -> ok
+        catch _:_ -> Name end;
     _ -> ok end,
     Packet;
 on_filter_presence(Packet, _State, _Nick) ->
@@ -705,8 +704,9 @@ on_broadcast_presence(_ServerHost, State,
         andalso not lists:member(User, ?WHITE_LIST_USERS)
         andalso get_main_room(RoomJid) of
     {Data, MainRoomJid} when Data#data.breakout_rooms_active == true ->
-        try maps:get(jid:tolower(From), State#state.users) of
-        #user{nick = Nick} ->
+        try {vm_util:get_state_from_jid(MainRoomJid),
+             maps:get(jid:tolower(From), State#state.users)} of
+        {{ok, MainState}, #user{nick = Nick}} when MainState#state.face_detect == true ->
             lists:foreach(fun(Jid) ->
                 send_json_msg(Jid, jiffy:encode(#{
                     event => ?JSON_TYPE_ATTENTION_UPDATE,
@@ -714,8 +714,9 @@ on_broadcast_presence(_ServerHost, State,
                     status => Status#text.data,
                     type => ?BREAKOUT_ROOMS_IDENTITY_TYPE
                 }))
-            end, Data#data.moderators)
-        catch _:{badkey, _} -> ok end;
+            end, Data#data.moderators);
+        _ -> ok
+        catch _:_ -> ok end;
     _ -> ok
     catch _:_ -> ok
     end;
