@@ -631,7 +631,7 @@ on_room_destroyed(_State, _ServerHost, Room, Host) ->
     BreakoutHost = breakout_room_muc(),
     case not vm_util:is_healthcheck_room(Room) andalso ets:lookup(vm_breakout_rooms, RoomJid) of
     [{_, Data}] ->
-        Message = <<"Conference ended.">>,
+        Message = <<"destroyed_by_host">>,
         maps:fold(fun(K, _, _) ->
             destroy_breakout_room(jid:decode(K), Message)
         end, ok, Data#data.breakout_rooms),
