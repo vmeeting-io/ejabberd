@@ -455,12 +455,15 @@ process_message(#message{
                             maps:get(<<"subject">>, Message)} of
                         {BreakoutRoomJid, Subject} ->
                             update_breakout_room(jid:decode(BreakoutRoomJid), Subject)
-                        catch _:_ -> ok end
-                    catch _:_ -> ok end
+                        catch _:_ -> ok end;
+                    _ -> ok
+                    catch _:_ -> ok end;
+                _ -> ok
                 catch _:_ ->
                     ?WARNING_MSG("~ts state not found", [jid:to_string(MainRoomJid)])
                 end
-            catch _:_ -> ok end
+            catch _:_ -> ok end;
+        _ -> ok
         catch _:_ -> ok end,
         drop;
     _ ->
