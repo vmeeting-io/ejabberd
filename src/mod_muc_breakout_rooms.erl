@@ -70,8 +70,8 @@ start(Host, _Opts) ->
         _:badarg -> ok
     end,
 
-    ejabberd_hooks:add(muc_filter_presence, Host, ?MODULE, on_filter_presence, 100),
-    ejabberd_hooks:add(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
+    % ejabberd_hooks:add(muc_filter_presence, Host, ?MODULE, on_filter_presence, 100),
+    % ejabberd_hooks:add(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
     ejabberd_hooks:add(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:add(join_room, Host, ?MODULE, on_join_room, 100),
@@ -82,8 +82,8 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(filter_packet, ?MODULE, process_message, 100).
 
 stop(Host) ->
-    ejabberd_hooks:delete(muc_filter_presence, Host, ?MODULE, on_filter_presence, 100),
-    ejabberd_hooks:delete(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
+    % ejabberd_hooks:delete(muc_filter_presence, Host, ?MODULE, on_filter_presence, 100),
+    % ejabberd_hooks:delete(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
     ejabberd_hooks:delete(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 100),
     ejabberd_hooks:delete(join_room, Host, ?MODULE, on_join_room, 100),
@@ -185,6 +185,7 @@ update_breakout_rooms(RoomJid) ->
         {Data, MainRoomJid} ->
             [{JID, Data}] = ets:lookup(vm_breakout_rooms, jid:to_string(MainRoomJid)),
             Data2 = Data#data{ is_broadcast_breakout_scheduled = false },
+            ets:insert(vm_breakout_rooms, { JID, Data2 }),
 
             RealJid = vm_util:internal_room_jid_match_rewrite(MainRoomJid),
             RealNode = RealJid#jid.luser,
@@ -215,22 +216,22 @@ update_breakout_rooms(RoomJid) ->
                 catch _:{badkey, _} -> Acc end
             end, Rooms, Data2#data.breakout_rooms),
 
-            M0 = maps:fold(fun(_, Participant, Acc) ->
-                case Participant of
-                #{ role := moderator, jid := Jid } -> [Jid|Acc];
-                _ -> Acc end
-            end, [], MainParticipants),
-            M1 = maps:fold(fun(_, Participants, Acc) ->
-                maps:fold(fun(_, Participant, Acc1) ->
-                    case Participant of
-                    #{ role := moderator, jid := Jid } -> [Jid|Acc1];
-                    _ -> Acc1 end
-                end, Acc, Participants)
-            end, M0, BreakoutParticipants),
+            % M0 = maps:fold(fun(_, Participant, Acc) ->
+            %     case Participant of
+            %     #{ role := moderator, jid := Jid } -> [Jid|Acc];
+            %     _ -> Acc end
+            % end, [], MainParticipants),
+            % M1 = maps:fold(fun(_, Participants, Acc) ->
+            %     maps:fold(fun(_, Participant, Acc1) ->
+            %         case Participant of
+            %         #{ role := moderator, jid := Jid } -> [Jid|Acc1];
+            %         _ -> Acc1 end
+            %     end, Acc, Participants)
+            % end, M0, BreakoutParticipants),
 
-            Data3 = Data2#data{ moderators = M1 },
-            ?INFO_MSG("===> moderators: ~p", [M1]),
-            ets:insert(vm_breakout_rooms, { JID, Data3 }),
+            % Data3 = Data2#data{ moderators = M1 },
+            % ?INFO_MSG("===> moderators: ~p", [M1]),
+            % ets:insert(vm_breakout_rooms, { JID, Data3 }),
 
             JsonMsg = jiffy:encode(#{
                 type => ?BREAKOUT_ROOMS_IDENTITY_TYPE,
