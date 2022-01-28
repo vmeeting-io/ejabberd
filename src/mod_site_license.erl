@@ -57,17 +57,27 @@ xmpp_domain(Host) ->
 
 
 on_start_room(State, _ServerHost, Room, Host) ->
-    CreatedTimeStamp = erlang:system_time(millisecond),
-    State1 = State#state{created_timestamp = CreatedTimeStamp},
-    ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, CreatedTimeStamp]),
-    State1.
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    case Host == MucHost of
+    true ->
+        CreatedTimeStamp = erlang:system_time(millisecond),
+        State1 = State#state{created_timestamp = CreatedTimeStamp},
+        ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, CreatedTimeStamp]),
+        State1;
+    _ -> State
+    end.
 
-on_vm_pre_disco_info(#state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = StateData) ->
-    TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
-    TimeRemained = MaxDurations - TimeElapsed,
-    Config = StateData#state.config#config{time_remained = TimeRemained},
-    StateData1 = StateData#state{config = Config},
-    StateData1.
+on_vm_pre_disco_info(State) ->
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    case State#state.host == MucHost of
+    true ->
+        #state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = State,
+        TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
+        TimeRemained = MaxDurations - TimeElapsed,
+        Config = State#state.config#config{time_remained = TimeRemained},
+        State#state{config = Config};
+    _ -> State
+    end.
 
 
 process(LocalPath, Request) ->
@@ -157,6 +167,23 @@ process_event(Data) ->
                 },
                 ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg]),
                 mod_muc_room:broadcast_json_msg(State3, <<"">>, JsonMsg);
+            _ -> ok
+            end;
+        _ -> ok
+        end,
+        
+        case maps:find(<<"pinned_tiles">>, DataJSON) of
+        {ok, Pinned} ->
+            case vm_util:get_room_state(Room, MucDomain) of
+            {ok, State4} when State4#state.pinned_tiles /= Pinned ->
+                State5 = State4#state{pinned_tiles = Pinned},
+                vm_util:set_room_state(Room, MucDomain, State5),
+                JsonMsg2 = #{
+                    type => <<"features/base/participants/pinned_tiles">>,
+                    pinned_tiles => Pinned
+                },
+                ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg2]),
+                mod_muc_room:broadcast_json_msg(State5, <<"">>, JsonMsg2);
             _ -> ok
             end;
         _ -> ok
