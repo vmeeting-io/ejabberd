@@ -62,6 +62,23 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     #jid{ lserver = Host, luser = Room } = Packet#presence.to,
     case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
     true ->
+        case length(State#state.pinned_tiles) > 0 orelse
+            State#state.tileview_max_columns > 0 of
+        true ->
+            JsonMsg = jiffy:encode(#{
+                type => <<"features/settings/tileview">>,
+                pinned_tiles => State#state.pinned_tiles,
+                tileview_max_columns => State#state.tileview_max_columns
+            }),
+            ejabberd_router:route(#message{
+                to = JID,
+                type = chat,
+                from = State#state.jid,
+                sub_els = [#json_message{data = JsonMsg}]
+            });
+        _ -> ok
+        end,
+
         % ?INFO_MSG("mod_participant_log:joined ~ts", [jid:to_string(JID)]),
         {{Year, Month, Day}, {Hour, Min, Sec}} = erlang:localtime(),
         JoinTime = #{year => Year,
