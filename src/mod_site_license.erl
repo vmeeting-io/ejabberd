@@ -71,7 +71,7 @@ on_vm_pre_disco_info(State) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     case State#state.host == MucHost of
     true ->
-        #state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = State
+        #state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = State,
         TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
         TimeRemained = MaxDurations - TimeElapsed,
         Config = State#state.config#config{time_remained = TimeRemained},
