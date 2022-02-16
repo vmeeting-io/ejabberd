@@ -64,7 +64,7 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
 
     User = JID#jid.user,
     #jid{ lserver = Host, luser = Room } = Packet#presence.to,
-    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    case is_valid_node(Room, Host) andalso (User == <<"recorder">> orelse not lists:member(User, ?WHITE_LIST_USERS)) of
     true ->
         case length(State#state.pinned_tiles) > 0 orelse
             State#state.tileview_max_columns > 0 of
@@ -79,7 +79,8 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
                 type = chat,
                 from = State#state.jid,
                 sub_els = [#json_message{data = JsonMsg}]
-            });
+            }),
+            ?INFO_MSG("send_json_msg: ~p, ~p", [jid:encode(JID), JsonMsg]);
         _ -> ok
         end,
 
