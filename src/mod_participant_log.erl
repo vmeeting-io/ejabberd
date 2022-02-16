@@ -50,9 +50,13 @@ stop(Host) ->
 
 is_valid_node(Room, Host) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    ServerHost = ejabberd_config:get_myname(),
+    RecorderHost = <<"recorder.", ServerHost/binary>>,
 
     not vm_util:is_healthcheck_room(Room) andalso
-    (Host == MucHost orelse Host == mod_muc_breakout_rooms:breakout_room_muc()).
+    (Host == MucHost
+        orelse Host == mod_muc_breakout_rooms:breakout_room_muc()
+        orelse Host == RecorderHost).
 
 on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
