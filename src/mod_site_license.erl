@@ -122,77 +122,77 @@ process_event(Data) ->
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} when RoomPID /= room_not_found, RoomPID /= invalid_service ->
+        ?INFO_MSG("process_event: delete_yn = true", []),
         mod_muc_admin:change_room_option(RoomPID, persistent, false),
         destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ when RoomPID /= room_not_found, RoomPID /= invalid_service ->
-        case maps:find(<<"max_durations">>, DataJSON) of
-        {ok, MaxDuration} when MaxDuration > 0 ->
-            case vm_util:get_room_state(Room, MucDomain) of
-                {ok, State} when State#state.config#config.time_remained < 0 ->
-                    CreatedTimeStamp = State#state.created_timestamp,
+        {ok, State} = vm_util:get_room_state(Room, MucDomain),
 
-                    TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
-                    TimeRemained = MaxDuration - TimeElapsed,
+        State1 = case maps:find(<<"max_durations">>, DataJSON) of
+        {ok, MaxDuration} when
+            MaxDuration > 0 andalso
+            State#state.config#config.time_remained < 0 ->
+            ?INFO_MSG("process_event: max_durations = ~p", [MaxDuration]),
+            CreatedTimeStamp = State#state.created_timestamp,
 
-                    mod_muc_admin:change_room_option(RoomPID, time_remained, TimeRemained),
-                    State1 = State#state{max_durations = MaxDuration},
-                    vm_util:set_room_state(Room, MucDomain, State1),
+            TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
+            TimeRemained = MaxDuration - TimeElapsed,
 
-                    destroy_room_after_secs(RoomPID, <<"duration_expired">>, TimeRemained);
-                _ ->
-                    ok
-            end;
+            mod_muc_admin:change_room_option(RoomPID, time_remained, TimeRemained),
+            destroy_room_after_secs(RoomPID, <<"duration_expired">>, TimeRemained),
+            State#state{max_durations = MaxDuration};
         _ ->
-            ok
+            State
         end,
 
         case maps:find(<<"max_occupants">>, DataJSON) of
         {ok, MaxOccupants} ->
             MaxUsers = if MaxOccupants < 0 -> ?MAX_USERS_DEFAULT;
                 true -> MaxOccupants end,
+            ?INFO_MSG("process_event: max_occupants = ~p", [MaxUsers]),
             mod_muc_admin:change_room_option(RoomPID, max_users, MaxUsers);
         _ ->
             ok
         end,
         
-        case maps:find(<<"face_detect">>, DataJSON) of
-        {ok, Enabled} ->
-            case vm_util:get_room_state(Room, MucDomain) of
-            {ok, State2} when State2#state.face_detect /= Enabled ->
-                State3 = State2#state{face_detect = Enabled},
-                vm_util:set_room_state(Room, MucDomain, State3),
-                JsonMsg = #{
-                    type => <<"features/face-detect/update">>,
-                    facedetect => Enabled
-                },
-                ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg]),
-                mod_muc_room:broadcast_json_msg(State3, <<"">>, JsonMsg);
-            _ -> ok
-            end;
-        _ -> ok
+        State2 = case maps:find(<<"face_detect">>, DataJSON) of
+        {ok, Enabled} when State1#state.face_detect /= Enabled ->
+            ?INFO_MSG("process_event: face_detect = ~p", [Enabled]),
+            JsonMsg = #{
+                type => <<"features/face-detect/update">>,
+                facedetect => Enabled
+            },
+            ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg]),
+            mod_muc_room:broadcast_json_msg(State1, <<"">>, JsonMsg),
+            State1#state{face_detect = Enabled};
+        _ -> State1
         end,
         
         Keys = [<<"pinned_tiles">>, <<"tileview_max_columns">>],
-        case maps:with(Keys, DataJSON) of
-        #{ <<"pinned_tiles">> := Pinned, <<"tileview_max_columns">> := TileViewMaxColumns } ->
-            case vm_util:get_room_state(Room, MucDomain) of
-            {ok, State4} when 
-                State4#state.pinned_tiles /= Pinned orelse 
-                State4#state.tileview_max_columns /= TileViewMaxColumns ->
+        State3 = case maps:with(Keys, DataJSON) of
+        #{ <<"pinned_tiles">> := Pinned, <<"tileview_max_columns">> := TileViewMaxColumns }
+        when State2#state.pinned_tiles /= Pinned orelse 
+             State2#state.tileview_max_columns /= TileViewMaxColumns ->
+            ?INFO_MSG("process_event: pinned_tiles = ~p, tileview_max_columns", [Pinned, TileViewMaxColumns]),
+            JsonMsg2 = #{
+                type => <<"features/settings/tileview">>,
+                pinned_tiles => Pinned,
+                tileview_max_columns => TileViewMaxColumns
+            },
+            ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg2]),
+            mod_muc_room:broadcast_json_msg(State2, <<"">>, JsonMsg2),
+            State2#state{pinned_tiles = Pinned, tileview_max_columns = TileViewMaxColumns};
+        _ -> State2
+        end,
 
-                State5 = State4#state{pinned_tiles = Pinned, tileview_max_columns = TileViewMaxColumns},
-                vm_util:set_room_state(Room, MucDomain, State5),
-                JsonMsg2 = #{
-                    type => <<"features/settings/tileview">>,
-                    pinned_tiles => Pinned,
-                    tileview_max_columns => TileViewMaxColumns
-                },
-                ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg2]),
-                mod_muc_room:broadcast_json_msg(State5, <<"">>, JsonMsg2);
-            _ -> ok
-            end;
-        _ -> ok
-        end;
+        State4 = case maps:find(<<"_id">>, DataJSON) of
+        {ok, RoomID} when State3#state.room_id /= RoomID ->
+            ?INFO_MSG("process_event: room_id = ~p", [RoomID]),
+            State3#state{room_id = RoomID};
+        _ -> State3
+        end,
+
+        State /= State4 andalso vm_util:set_room_state(Room, MucDomain, State4);
     _ ->
         ok
     end,
