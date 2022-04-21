@@ -21,7 +21,6 @@
     on_join_room/6,
     on_leave_room/4,
     on_room_destroyed/4,
-    on_start_room/4,
     start/2,
     stop/1
 ]).
@@ -38,14 +37,12 @@ start(Host, _Opts) ->
     ejabberd_hooks:add(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:add(leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:add(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
-    ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:add(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 stop(Host) ->
     ejabberd_hooks:delete(vm_join_room, Host, ?MODULE, on_join_room, 100),
     ejabberd_hooks:delete(leave_room, Host, ?MODULE, on_leave_room, 100),
     ejabberd_hooks:delete(vm_broadcast_presence, Host, ?MODULE, on_broadcast_presence, 100),
-    ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
 is_valid_node(Room, Host) ->
@@ -114,17 +111,14 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
             {ok, {Code, Resp}} when Code >= 200, Code =< 299 ->
                 try element(2, lists:nth(1, element(1,jiffy:decode(Resp)))) of
                 Docs -> 
-                    try lists:nth(1, Docs) of
-                    Conf ->
-                        try maps:get(<<"_id">>, Conf) of
-                        RoomID -> State#state{ room_id = RoomID }
-                        catch _:_ -> State end
+                    try lists:keyfind(<<"_id">>, 1, element(1, lists:nth(1, Docs))) of
+                    {_, RoomID} -> State#state{ room_id = RoomID }
                     catch _:_ -> State end
                 catch _:_ -> State end;
             _ -> State end
         end,
 
-        % ?INFO_MSG("on_join_room: ~ts ~ts ~ts", [Name, StatsID, Email]),
+        % ?INFO_MSG("on_join_room: ~ts ~ts ~ts ~ts", [Name, StatsID, Email, S1#state.room_id]),
         Body = #{
             conference => S1#state.room_id,
             joinTime => JoinTime,
@@ -257,34 +251,6 @@ on_broadcast_presence(_ServerHost, State,
     end;
 on_broadcast_presence(_ServerHost, _State, _Packet, _JID) ->
     ok.
-
-on_start_room(State, _ServerHost, Room, Host) ->
-    ?INFO_MSG("participant_log:on_start_room: ~ts, ~ts", [Room, Host]),
-
-    case is_valid_node(Room, Host) of
-    true ->
-        MeetingID = State#state.config#config.meeting_id,
-        {SiteID, Name} = vm_util:extract_subdomain(Room),
-
-        Url = ?VMAPI_BASE ++ "sites/"
-                ++ binary:bin_to_list(SiteID)
-                ++ "/conferences",
-        ContentType = "application/x-www-form-urlencoded",
-        ReqBody = uri_string:compose_query(
-                    [{"name", Name}, {"meeting_id", MeetingID}]),
-
-        case httpc:request(patch, {Url, [], ContentType, ReqBody}, [], []) of
-        {ok, {{_, 201, _} , _Header, Rep}} ->
-            RepJSON = jiffy:decode(Rep, [return_maps]),
-            RoomID = maps:get(<<"_id">>, RepJSON),
-            FaceDetect = maps:get(<<"face_detect">>, RepJSON, false),
-            State1 = State#state{room_id = RoomID, face_detect = FaceDetect},
-            State1;
-
-        {_, _Rep} -> State
-        end;
-    _ -> State
-    end.
 
 on_room_destroyed(State, _ServerHost, Room, Host) ->
     ?INFO_MSG("participant_log:on_room_destroyed: ~ts, ~ts", [Room, Host]),
