@@ -67,7 +67,6 @@
     pubsub                               = <<"">> :: binary(),
     lang                                 = ejabberd_option:language() :: binary(),
     meeting_id                           = <<"">> :: binary(),
-    user_device_access_disabled          = false :: boolean(),
     time_remained                        = -1 :: integer()
 }).
 
@@ -105,6 +104,11 @@
     voters = #{} :: map()
 }).
 
+-record(compact_answer, {
+    key = 0 :: integer(),
+    name = <<"">> :: binary()
+}).
+
 -record(poll, {
     id = <<"">> :: binary(),
     senderId = <<"">> :: binary(),
@@ -112,6 +116,13 @@
     question = <<"">> :: binary(),
     answers = [] :: [#answer{}]
 }).
+
+-record(polls, {
+    by_id = #{} :: #{binary() => #poll{}},
+    order = [] :: [#poll{}]
+}).
+
+-type polls() :: #polls{}.
 
 -record(state,
 {
@@ -145,12 +156,16 @@
     main_room_pid           = none :: pid() | none,
     max_durations           = -1 :: integer(),
     created_timestamp       = 0 :: non_neg_integer(),
-    polls                   = [] :: [#poll{}],
+    polls                   = #polls{} :: polls(),
     is_breakout             = false :: boolean(),
     breakout_main_room      = <<"">> :: binary(),
     timer_end_time          = 1 :: non_neg_integer(),
     timer_initiator         = <<"">> :: binary(),
-    face_detect             = false :: boolean()
+    face_detect             = false :: boolean(),
+    av_moderation           = #{} :: #{binary() => [binary()]},
+    av_moderation_actors    = #{} :: #{binary() => binary()},
+    pinned_tiles            = [] :: [binary()],
+    tileview_max_columns    = 0 :: non_neg_integer()
 }).
 
 -type users() :: #{ljid() => #user{}}.

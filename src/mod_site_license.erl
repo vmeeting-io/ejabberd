@@ -57,17 +57,27 @@ xmpp_domain(Host) ->
 
 
 on_start_room(State, _ServerHost, Room, Host) ->
-    CreatedTimeStamp = erlang:system_time(millisecond),
-    State1 = State#state{created_timestamp = CreatedTimeStamp},
-    ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, CreatedTimeStamp]),
-    State1.
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    case Host == MucHost of
+    true ->
+        CreatedTimeStamp = erlang:system_time(millisecond),
+        State1 = State#state{created_timestamp = CreatedTimeStamp},
+        ?INFO_MSG("site_license:on_start_room ~p ~p", [{Room, Host}, CreatedTimeStamp]),
+        State1;
+    _ -> State
+    end.
 
-on_vm_pre_disco_info(#state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = StateData) ->
-    TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
-    TimeRemained = MaxDurations - TimeElapsed,
-    Config = StateData#state.config#config{time_remained = TimeRemained},
-    StateData1 = StateData#state{config = Config},
-    StateData1.
+on_vm_pre_disco_info(State) ->
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    case State#state.host == MucHost of
+    true ->
+        #state{max_durations = MaxDurations, created_timestamp = CreatedTimeStamp} = State,
+        TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
+        TimeRemained = MaxDurations - TimeElapsed,
+        Config = State#state.config#config{time_remained = TimeRemained},
+        State#state{config = Config};
+    _ -> State
+    end.
 
 
 process(LocalPath, Request) ->
@@ -115,13 +125,6 @@ process_event(Data) ->
         mod_muc_admin:change_room_option(RoomPID, persistent, false),
         destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ when RoomPID /= room_not_found, RoomPID /= invalid_service ->
-        case maps:find(<<"userDeviceAccessDisabled">>, DataJSON) of
-        {ok, UDAD} ->
-            mod_muc_admin:change_room_option(RoomPID, user_device_access_disabled, UDAD);
-        _ ->
-            ok
-        end,
-
         case maps:find(<<"max_durations">>, DataJSON) of
         {ok, MaxDuration} when MaxDuration > 0 ->
             case vm_util:get_room_state(Room, MucDomain) of
@@ -164,6 +167,28 @@ process_event(Data) ->
                 },
                 ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg]),
                 mod_muc_room:broadcast_json_msg(State3, <<"">>, JsonMsg);
+            _ -> ok
+            end;
+        _ -> ok
+        end,
+        
+        Keys = [<<"pinned_tiles">>, <<"tileview_max_columns">>],
+        case maps:with(Keys, DataJSON) of
+        #{ <<"pinned_tiles">> := Pinned, <<"tileview_max_columns">> := TileViewMaxColumns } ->
+            case vm_util:get_room_state(Room, MucDomain) of
+            {ok, State4} when 
+                State4#state.pinned_tiles /= Pinned orelse 
+                State4#state.tileview_max_columns /= TileViewMaxColumns ->
+
+                State5 = State4#state{pinned_tiles = Pinned, tileview_max_columns = TileViewMaxColumns},
+                vm_util:set_room_state(Room, MucDomain, State5),
+                JsonMsg2 = #{
+                    type => <<"features/settings/tileview">>,
+                    pinned_tiles => Pinned,
+                    tileview_max_columns => TileViewMaxColumns
+                },
+                ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg2]),
+                mod_muc_room:broadcast_json_msg(State5, <<"">>, JsonMsg2);
             _ -> ok
             end;
         _ -> ok

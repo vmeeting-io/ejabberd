@@ -10,6 +10,7 @@
     is_healthcheck_room/1,
     room_jid_match_rewrite/1,
     room_jid_match_rewrite/2,
+    internal_room_jid_match_rewrite/1,
     internal_room_jid_match_rewrite/2,
     extract_subdomain/1,
     get_subtag_value/2,
@@ -189,6 +190,12 @@ extract_subdomain(Room) ->
     end.
 
 % Utility function to check and convert a room JID from real [foo]room1@muc.example.com to virtual room1@muc.foo.example.com
+-spec internal_room_jid_match_rewrite(undefined | jid()) -> undefined | jid().
+internal_room_jid_match_rewrite(RoomJid) when RoomJid == undefined ->
+    undefined;
+internal_room_jid_match_rewrite(RoomJid) ->
+    internal_room_jid_match_rewrite(RoomJid, undefined).
+
 -spec internal_room_jid_match_rewrite(undefined | jid(), stanza()) -> undefined | jid().
 internal_room_jid_match_rewrite(RoomJid, _Stanza) when RoomJid == undefined ->
     undefined;
@@ -196,12 +203,12 @@ internal_room_jid_match_rewrite(RoomJid, Stanza) ->
     {N, H, R} = jid:split(RoomJid),
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
     [Prefix, Base] = string:split(MucDomain, "."),
-    Id = xmpp:get_id(Stanza),
 
-    case {(H /= MucDomain) or (not jid:is_nodename(N)), ets:lookup(roomless_iqs, Id)} of
+    case {(H /= MucDomain) or (not jid:is_nodename(N)), Stanza == undefined orelse ets:lookup(roomless_iqs, xmpp:get_id(Stanza))} of
+    {true, true} -> RoomJid;
     {true, []} -> RoomJid;
     {true, [{_, Result}]} ->
-        ets:delete(roomless_iqs, Id),
+        ets:delete(roomless_iqs, xmpp:get_id(Stanza)),
         Result;
     _ ->
         case extract_subdomain(N) of

@@ -1165,7 +1165,6 @@ change_option(Option, Value, Config) ->
 	title -> Config#config{title = Value};
 	vcard -> Config#config{vcard = Value};
 	voice_request_min_interval -> Config#config{voice_request_min_interval = Value};
-	user_device_access_disabled -> Config#config{user_device_access_disabled = Value};
 	time_remained -> Config#config{time_remained = Value}
     end.
 

@@ -38,7 +38,6 @@ depends(_Host, _Opts) ->
     [].
 
 mod_options(_Host) ->
-    ?INFO_MSG("mod_muc_domain_mapper ~ts", [_Host]),
     [].
 
 mod_doc() ->

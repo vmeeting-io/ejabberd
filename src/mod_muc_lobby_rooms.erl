@@ -17,8 +17,8 @@
 %% gen_mod API callbacks
 -export([start/2, stop/1, depends/2, mod_options/1, mod_opt_type/1,
     on_start_room/4, on_room_destroyed/4, on_pre_join_room/5,
-    on_muc_invite/5, on_change_state/3, disco_local_identity/5,on_kick_participant/3,
-    mod_doc/0]).
+    on_muc_invite/5, on_change_state/3, disco_local_identity/5,
+    on_kick_participant/3, mod_doc/0]).
 
 start(Host, _Opts) ->
     ejabberd_hooks:add(vm_kick_participant, Host, ?MODULE, on_kick_participant, 100),

@@ -8,10 +8,23 @@
 -include("mod_muc_room.hrl").
 -include("vmeeting_common.hrl").
 
+-define(SERVICE_REQUEST_TIMEOUT, 5000). % 5 seconds.
+-define(VMAPI_BASE, "http://vmapi:5000/").
+-define(CONTENT_TYPE, "application/json").
+
 %% gen_mod API callbacks
--export([start/2, stop/1, depends/2, mod_options/1, on_join_room/6,
-    on_broadcast_presence/4, on_leave_room/4, on_start_room/4,
-    on_room_destroyed/4, mod_doc/0]).
+-export([
+    depends/2,
+    mod_doc/0,
+    mod_options/1,
+    on_broadcast_presence/4,
+    on_join_room/6,
+    on_leave_room/4,
+    on_room_destroyed/4,
+    on_start_room/4,
+    start/2,
+    stop/1
+]).
 
 start(Host, _Opts) ->
     ?INFO_MSG("muc_participant_log:start ~ts", [Host]),
@@ -35,14 +48,42 @@ stop(Host) ->
     ejabberd_hooks:delete(vm_start_room, Host, ?MODULE, on_start_room, 50),
     ejabberd_hooks:delete(room_destroyed, Host, ?MODULE, on_room_destroyed, 100).
 
+is_valid_node(Room, Host) ->
+    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
+    ServerHost = ejabberd_config:get_myname(),
+    RecorderHost = <<"recorder.", ServerHost/binary>>,
+
+    not vm_util:is_healthcheck_room(Room) andalso
+    (Host == MucHost
+        orelse Host == mod_muc_breakout_rooms:breakout_room_muc()
+        orelse Host == RecorderHost).
+
 on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     % ?INFO_MSG("mod_participant_log:on_join_room ~ts ~ts", [_RoomID, Nick]),
 
     User = JID#jid.user,
+    #jid{ lserver = Host, luser = Room } = Packet#presence.to,
+    case is_valid_node(Room, Host) andalso (User == <<"recorder">> orelse not lists:member(User, ?WHITE_LIST_USERS)) of
+    true ->
+        case length(State#state.pinned_tiles) > 0 orelse
+            State#state.tileview_max_columns > 0 of
+        true ->
+            JsonMsg = jiffy:encode(#{
+                type => <<"features/settings/tileview">>,
+                pinned_tiles => State#state.pinned_tiles,
+                tileview_max_columns => State#state.tileview_max_columns
+            }),
+            ejabberd_router:route(#message{
+                to = JID,
+                type = chat,
+                from = State#state.jid,
+                sub_els = [#json_message{data = JsonMsg}]
+            }),
+            ?INFO_MSG("send_json_msg: ~p, ~p", [jid:encode(JID), JsonMsg]);
+        _ -> ok
+        end,
 
-    case {string:equal(Packet#presence.to#jid.server, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
-    {true, false} ->
         % ?INFO_MSG("mod_participant_log:joined ~ts", [jid:to_string(JID)]),
         {{Year, Month, Day}, {Hour, Min, Sec}} = erlang:localtime(),
         JoinTime = #{year => Year,
@@ -57,10 +98,35 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         Name = vm_util:get_subtag_value(SubEls, <<"nick">>),
         StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
         Email = vm_util:get_subtag_value(SubEls, <<"email">>, null),
+        { RoomName, SiteID } = vm_util:split_room_and_site(State#state.room),
+
+        GetRequest = ?VMAPI_BASE ++ "sites/" 
+                ++ binary:bin_to_list(SiteID)
+                ++ "/conferences"
+                ++ "?name=" ++ binary:bin_to_list(RoomName)
+                ++ "&delete_yn=false",
+        Options = [{body_format, binary}, {full_result, false}],
+        HttpOptions = [{timeout, ?SERVICE_REQUEST_TIMEOUT}],
+
+        S1 = if State#state.room_id /= <<>> ->
+            State;
+        true -> case httpc:request(get, {GetRequest, []}, HttpOptions, Options) of
+            {ok, {Code, Resp}} when Code >= 200, Code =< 299 ->
+                try element(2, lists:nth(1, element(1,jiffy:decode(Resp)))) of
+                Docs -> 
+                    try lists:nth(1, Docs) of
+                    Conf ->
+                        try maps:get(<<"_id">>, Conf) of
+                        RoomID -> State#state{ room_id = RoomID }
+                        catch _:_ -> State end
+                    catch _:_ -> State end
+                catch _:_ -> State end;
+            _ -> State end
+        end,
 
         % ?INFO_MSG("on_join_room: ~ts ~ts ~ts", [Name, StatsID, Email]),
         Body = #{
-            conference => State#state.room_id,
+            conference => S1#state.room_id,
             joinTime => JoinTime,
             leaveTime => null,
             name => Name,
@@ -70,8 +136,7 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
             stats_id => StatsID
         },
 
-        Url = "http://vmapi:5000/plog/",
-        ContentType = "application/json",
+        Url = ?VMAPI_BASE ++ "plog/",
         ReqBody = jiffy:encode(Body),
 
         ReceiverFunc = fun(ReplyInfo) ->
@@ -93,24 +158,21 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
                 ?WARNING_MSG("[~p] ~p: recv http reply ~p~n", [?MODULE, ?FUNCTION_NAME, ReplyInfo])
             end
         end,
-        httpc:request(post, {Url, [], ContentType, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]);
+        httpc:request(post, {Url, [], ?CONTENT_TYPE, ReqBody}, [], [{sync, false}, {receiver, ReceiverFunc}]),
+        S1;
+    _ -> State end.
 
-    _ -> ok
-    end,
-
-    State.
-
-on_leave_room(_ServerHost, _Room, Host, JID) ->
+on_leave_room(_ServerHost, Room, Host, JID) ->
     LJID = jid:tolower(JID),
     MucHost = gen_mod:get_module_opt(global, mod_muc, host),
     User = JID#jid.user,
 
-    case {string:equal(Host, MucHost), lists:member(User, ?WHITE_LIST_USERS)} of
-    {true, false} ->
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         case ets:lookup(vm_users, LJID) of
         [{LJID, VMUser}] ->
             VMUserID = maps:get(id, VMUser),
-            Url = "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+            Url = ?VMAPI_BASE ++ "plog/" ++ binary:bin_to_list(VMUserID),
             httpc:request(delete, {Url, [], [], []}, [], [{sync, false}]),
 
             ets:delete(vm_users, LJID);
@@ -121,13 +183,12 @@ on_leave_room(_ServerHost, _Room, Host, JID) ->
     end.
 
 on_broadcast_presence(_ServerHost, State,
-                        #presence{to = To, type = PresenceType, status = [], sub_els = SubEls},
+                        #presence{to = To, type = available, status = [], sub_els = SubEls},
                         #jid{user = User} = JID) ->
-    IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
-    {false, available, true} ->
+    #jid{lserver = Host, luser = Room} = To,
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         LJID = jid:tolower(JID),
 
         case ets:lookup(vm_users, LJID) of
@@ -139,9 +200,9 @@ on_broadcast_presence(_ServerHost, State,
 
             if VMUserName /= Name ->
                 httpc:request(patch, {
-                    "http://vmapi:5000/plog/" ++ binary:bin_to_list(VMUserID),
+                    ?VMAPI_BASE ++ "plog/" ++ binary:bin_to_list(VMUserID),
                     [],
-                    "application/json",
+                    ?CONTENT_TYPE,
                     jiffy:encode(#{name => Name})
                 }, [], [{sync, false}]),
                 ets:insert(vm_users, {LJID, VMUser#{name => Name}});
@@ -154,32 +215,35 @@ on_broadcast_presence(_ServerHost, State,
     _ -> ok
     end;
 on_broadcast_presence(_ServerHost, State,
-                        #presence{to = To, type = PresenceType, status = [Status]},
+                        #presence{to = To, type = available, status = [Status], sub_els = SubEls},
                         #jid{user = User} = JID) ->
-    IsWhiteListUser = lists:member(User, ?WHITE_LIST_USERS),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case {IsWhiteListUser, PresenceType, string:equal(To#jid.server, MucHost)} of
-    {false, available, true} ->
+    #jid{lserver = Host, luser = Room} = To,
+    case is_valid_node(Room, Host) andalso not lists:member(User, ?WHITE_LIST_USERS) of
+    true ->
         LJID = jid:tolower(JID),
 
         case ets:lookup(vm_users, LJID) of
         [{LJID, VMUser}] ->
+            VMUserEmail = maps:get(email, VMUser, null),
             VMUserStatus = maps:get(status, VMUser, null),
             VMUserNick = maps:get(nick, VMUser),
+            StatsID = vm_util:get_subtag_value(SubEls, <<"stats-id">>),
             % ?INFO_MSG("mod_participant_log:on_broadcast_presence ~p, ~p", [VMUserStatus, Status#text.data]),
 
             if VMUserStatus /= Status#text.data ->
                 MeetingID = State#state.config#config.meeting_id,
                 NewStatus = Status#text.data,
                 httpc:request(post, {
-                    "http://vmapi:5000/attentions/",
+                    ?VMAPI_BASE ++ "attentions/",
                     [],
                     "application/json",
                     jiffy:encode(#{
                         conference => MeetingID,
                         nick => VMUserNick,
-                        status => NewStatus})
+                        status => NewStatus,
+                        email => VMUserEmail,
+                        stats_id => StatsID})
                 }, [], [{sync, false}]),
 
                 ets:insert(vm_users, {LJID, VMUser#{status => NewStatus}});
@@ -190,18 +254,19 @@ on_broadcast_presence(_ServerHost, State,
         end;
 
     _ -> ok
-    end.
+    end;
+on_broadcast_presence(_ServerHost, _State, _Packet, _JID) ->
+    ok.
 
 on_start_room(State, _ServerHost, Room, Host) ->
     ?INFO_MSG("participant_log:on_start_room: ~ts, ~ts", [Room, Host]),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case string:equal(Host, MucHost) of
+    case is_valid_node(Room, Host) of
     true ->
         MeetingID = State#state.config#config.meeting_id,
         {SiteID, Name} = vm_util:extract_subdomain(Room),
 
-        Url = "http://vmapi:5000/sites/"
+        Url = ?VMAPI_BASE ++ "sites/"
                 ++ binary:bin_to_list(SiteID)
                 ++ "/conferences",
         ContentType = "application/x-www-form-urlencoded",
@@ -212,7 +277,8 @@ on_start_room(State, _ServerHost, Room, Host) ->
         {ok, {{_, 201, _} , _Header, Rep}} ->
             RepJSON = jiffy:decode(Rep, [return_maps]),
             RoomID = maps:get(<<"_id">>, RepJSON),
-            State1 = State#state{room_id = RoomID},
+            FaceDetect = maps:get(<<"face_detect">>, RepJSON, false),
+            State1 = State#state{room_id = RoomID, face_detect = FaceDetect},
             State1;
 
         {_, _Rep} -> State
@@ -222,15 +288,14 @@ on_start_room(State, _ServerHost, Room, Host) ->
 
 on_room_destroyed(State, _ServerHost, Room, Host) ->
     ?INFO_MSG("participant_log:on_room_destroyed: ~ts, ~ts", [Room, Host]),
-    MucHost = gen_mod:get_module_opt(global, mod_muc, host),
 
-    case string:equal(Host, MucHost) of
+    case is_valid_node(Room, Host) of
     true ->
         % TODO: check if the room name start with __jicofo-health-check
         {SiteID, _} = vm_util:extract_subdomain(Room),
         RoomID = State#state.room_id,
 
-        Url = "http://vmapi:5000/sites/"
+        Url = ?VMAPI_BASE ++ "sites/"
                 ++ binary:bin_to_list(SiteID)
                 ++ "/conferences/"
                 ++ binary:bin_to_list(RoomID),

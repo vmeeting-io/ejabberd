@@ -46,6 +46,7 @@
 	 shutdown/1,
 	 get_config/1,
 	 set_config/2,
+	 get_owners/1,
 	 get_state/1,
 	 set_state/2,
 	 change_item/5,
@@ -314,7 +315,6 @@ kick_all(RoomPid, Reason, ExceptUsers) ->
 	case get_state(RoomPid) of
 	{ok, State} ->
 		Users = get_users_and_subscribers(State),
-		Affiliations = State#state.affiliations,
 		maps:fold(fun(_, #user{jid = Jid}, _) ->
 				case lists:member(Jid#jid.user, ExceptUsers) of
 				true ->
@@ -1554,16 +1554,16 @@ expulse_participant(Packet, From, StateData, Reason1) ->
     end,
     remove_online_user(From, NewState).
 
-% -spec get_owners(state()) -> [jid:jid()].
-% get_owners(StateData) ->
-%     maps:fold(
-%        fun(LJID, owner, Acc) ->
-% 	       [jid:make(LJID)|Acc];
-% 	  (LJID, {owner, _}, Acc) ->
-% 	       [jid:make(LJID)|Acc];
-% 	  (_, _, Acc) ->
-% 	       Acc
-%        end, [], StateData#state.affiliations).
+-spec get_owners(state()) -> [jid:jid()].
+get_owners(StateData) ->
+    maps:fold(
+       fun(LJID, owner, Acc) ->
+	       [jid:make(LJID)|Acc];
+	   (LJID, {owner, _}, Acc) ->
+	       [jid:make(LJID)|Acc];
+	   (_, _, Acc) ->
+	       Acc
+       end, [], StateData#state.affiliations).
 
 -spec set_affiliation(jid(), affiliation(), state()) -> state().
 set_affiliation(JID, Affiliation, StateData) ->
@@ -1638,8 +1638,20 @@ do_get_affiliation(JID, #state{config = #config{persistent = false}} = StateData
 do_get_affiliation(JID, StateData) ->
 	% if this is lobbyroom, get affiliation from main room
 	if is_pid(StateData#state.main_room_pid) ->
-		{ok, MainRoomState} = get_state(StateData#state.main_room_pid),
-		get_affiliation(JID, MainRoomState);
+		case get_state(StateData#state.main_room_pid) of
+		{ok, MainRoomState} ->
+			get_affiliation(JID, MainRoomState);
+		_ ->
+			do_get_affiliation_fallback(JID, StateData)
+		end;
+	StateData#state.breakout_main_room /= <<"">> ->
+		MainRoomJid = jid:decode(StateData#state.breakout_main_room),
+		case vm_util:get_state_from_jid(MainRoomJid) of
+		{ok, MainRoomState} ->
+			get_affiliation(JID, MainRoomState);
+		_ ->
+			do_get_affiliation_fallback(JID, StateData)
+		end;
 	true ->
 		Room = StateData#state.room,
 		Host = StateData#state.host,
@@ -2001,6 +2013,10 @@ remove_online_user(JID, StateData, Reason) ->
 	    catch _:{badkey, _} ->
 		    StateData#state.nicks
 	    end,
+    Room = StateData#state.room,
+    Host = StateData#state.host,
+    ServerHost = StateData#state.server_host,
+    ejabberd_hooks:run(left_room, ServerHost, [ServerHost, Room, Host, JID]),
     reset_hibernate_timer(StateData#state{users = Users, nicks = Nicks}).
 
 -spec filter_presence(presence()) -> presence().
@@ -2995,22 +3011,25 @@ search_affiliation_fallback(Affiliation, StateData) ->
 process_admin_items_set(UJID, Items, Lang, StateData) ->
     UAffiliation = get_affiliation(UJID, StateData),
     URole = get_role(UJID, StateData),
-    case catch find_changed_items(UJID, UAffiliation, URole,
-				  Items, Lang, StateData, [])
-	of
-      {result, Res} ->
-	  ?INFO_MSG("Processing MUC admin query from ~ts in "
+    case catch find_changed_items(UJID, UAffiliation, URole, Items, Lang, StateData, []) of
+	{result, Res} ->
+	  	?INFO_MSG("Processing MUC admin query from ~ts in "
 		    "room ~ts:~n ~p",
 		    [jid:encode(UJID),
 		     jid:encode(StateData#state.jid), Res]),
-	  case lists:foldl(process_item_change(UJID),
-			   StateData, lists:flatten(Res)) of
-	      {error, _} = Err ->
-		  Err;
-	      NSD ->
-		  store_room(NSD),
-		  {result, undefined, NSD}
-	  end;
+	  	case lists:foldl(process_item_change(UJID), StateData, lists:flatten(Res)) of
+		{error, _} = Err ->
+		  	Err;
+		NSD ->
+			case Items of
+			[#muc_item{jid = JID, reason = Reason, affiliation = Affiliation}|_] ->
+				ejabberd_hooks:run(vm_set_affiliation, NSD#state.server_host,
+					[NSD, UJID, JID, Affiliation, Reason]);
+			_ -> ok
+			end,
+		  	store_room(NSD),
+		  	{result, undefined, NSD}
+	  	end;
 	{error, Err} -> {error, Err}
     end.
 
@@ -3752,7 +3771,6 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({captcha_protected, V}, C) -> C#config{captcha_protected = V};
 	 ({allowinvites, V}, C) -> C#config{allow_user_invites = V};
 	 ({meetingId, V}, C) -> C#config{meeting_id = V};
-	 ({userDeviceAccessDisabled, V}, C) -> C#config{user_device_access_disabled = V};
 	 ({timeremained, V}, C) -> C#config{time_remained = V};
 	 ({allow_subscription, V}, C) -> C#config{allow_subscription = V};
 	 ({passwordprotectedroom, V}, C) -> C#config{password_protected = V};
@@ -4258,7 +4276,6 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 	   {allowpm, AllowPM},
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
-	   {userDeviceAccessDisabled, Config#config.user_device_access_disabled},
 	   {lobbyroom, StateData#state.lobbyroom},
 	   {isbreakout, StateData#state.is_breakout},
 	   {breakout_main_room, StateData#state.breakout_main_room},
