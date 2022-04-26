@@ -173,7 +173,7 @@ process_event(Data) ->
         #{ <<"pinned_tiles">> := Pinned, <<"tileview_max_columns">> := TileViewMaxColumns }
         when State2#state.pinned_tiles /= Pinned orelse 
              State2#state.tileview_max_columns /= TileViewMaxColumns ->
-            ?INFO_MSG("process_event: pinned_tiles = ~p, tileview_max_columns", [Pinned, TileViewMaxColumns]),
+            % ?INFO_MSG("process_event: pinned_tiles = ~p, tileview_max_columns = ~p", [Pinned, TileViewMaxColumns]),
             JsonMsg2 = #{
                 type => <<"features/settings/tileview">>,
                 pinned_tiles => Pinned,
