@@ -98,9 +98,7 @@ process(LocalPath, Request) ->
 
 process_notice(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
-    {match, [SiteID, RoomName]} = re:run(maps:get(<<"room_name">>, DataJSON),
-                                        "\\[(?<site>\\w+)\\](?<room>.+)",
-                                        [{capture, [site, room], binary}]),
+    { RoomName, SiteID } = vm_util:split_room_and_site(maps:get(<<"room_name">>, DataJSON)),
     RoomNameEnc = vm_util:percent_encode(RoomName),
     Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
@@ -111,9 +109,7 @@ process_notice(Data) ->
 process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
     % ?INFO_MSG("decoded data: ~p", [DataJSON]),
-    {match, [SiteID, RoomName]} = re:run(maps:get(<<"room_name">>, DataJSON),
-                                        "\\[(?<site>\\w+)\\](?<room>.+)",
-                                        [{capture, [site, room], binary}]),
+    { RoomName, SiteID } = vm_util:split_room_and_site(maps:get(<<"room_name">>, DataJSON)),
     RoomNameEnc = vm_util:percent_encode(RoomName),
     Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
@@ -212,13 +208,6 @@ destroy_room(RoomPID, Message) ->
 destroy_room_after_secs(RoomPID, Message, After) ->
     timer:apply_after(After * 1000, mod_site_license, destroy_room, [RoomPID, Message]).
 
-
-% split_room_and_host(Room) ->
-%     {match, [_SiteID, RoomName]} = re:run(Room,
-%                                         "\\[(?<site>\\w+)\\](?<room>.+)",
-%                                         [{capture, [site, room], binary}]),
-%     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
-%     {RoomName, MucDomain}.
 
 verify_auth_token(Auth) ->
     case Auth of

@@ -271,7 +271,7 @@ hex_octet(N) ->
 
 split_room_and_site(Room) ->
     case re:run(Room,
-        "\\[(?<site>\\w+)\\](?<room>.+)",
+        "\\[(?<site>[^\\]]+)\\](?<room>.+)",
         [{capture, [site, room], binary}]) of
     {match, [SiteID, RoomName]} ->
         {RoomName, SiteID};
