@@ -192,7 +192,20 @@ process_event(Data) ->
         _ -> State3
         end,
 
-        State /= State4 andalso vm_util:set_room_state(Room, MucDomain, State4);
+        State5 = case maps:find(<<"whiteboard_owner">>, DataJSON) of
+        {ok, WhiteboardOwner} when State4#state.whiteboard_owner /= WhiteboardOwner ->
+            ?INFO_MSG("process_event: whitboard_owner = ~p", [WhiteboardOwner]),
+            JsonMsg3 = #{
+                type => <<"whiteboard">>,
+                owner => WhiteboardOwner
+            },
+            ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg3]),
+            mod_muc_room:broadcast_json_msg(State4, <<"">>, JsonMsg3),
+            State4#state{whiteboard_owner = WhiteboardOwner};
+        _ -> State4
+        end,
+
+        State /= State5 andalso vm_util:set_room_state(Room, MucDomain, State5);
     _ ->
         ok
     end,

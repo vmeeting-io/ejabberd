@@ -81,6 +81,22 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
         _ -> ok
         end,
 
+        case State#state.whiteboard_owner of
+        WhiteboardOwner when WhiteboardOwner /= <<"">> ->
+            JsonMsg2 = jiffy:encode(#{
+                type => <<"whiteboard">>,
+                owner => State#state.whiteboard_owner
+            }),
+            ejabberd_router:route(#message{
+                to = JID,
+                type = chat,
+                from = State#state.jid,
+                sub_els = [#json_message{data = JsonMsg2}]
+            }),
+            ?INFO_MSG("send_json_msg: ~p, ~p", [jid:encode(JID), JsonMsg2]);
+        _ -> ok
+        end,
+
         % ?INFO_MSG("mod_participant_log:joined ~ts", [jid:to_string(JID)]),
         {{Year, Month, Day}, {Hour, Min, Sec}} = erlang:localtime(),
         JoinTime = #{year => Year,
