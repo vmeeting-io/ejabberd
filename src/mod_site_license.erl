@@ -116,9 +116,12 @@ process_event(Data) ->
                                         [{capture, [site, room], binary}]),
     RoomNameEnc = vm_util:percent_encode(RoomName),
     Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
-    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
-    RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
-    ?INFO_MSG("process_event: ~ts ~ts ~p", [Room, MucDomain, RoomPID]),
+    Domain = case maps:find(<<"main_room">>, DataJSON) of
+    {ok, _} -> mod_muc_breakout_rooms:breakout_room_muc();
+    _ -> gen_mod:get_module_opt(global, mod_muc, host)
+    end,
+    RoomPID = mod_muc_admin:get_room_pid(Room, Domain),
+    ?INFO_MSG("process_event: ~ts ~ts ~p", [Room, Domain, RoomPID]),
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} when RoomPID /= room_not_found, RoomPID /= invalid_service ->
@@ -126,7 +129,7 @@ process_event(Data) ->
         mod_muc_admin:change_room_option(RoomPID, persistent, false),
         destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ when RoomPID /= room_not_found, RoomPID /= invalid_service ->
-        {ok, State} = vm_util:get_room_state(Room, MucDomain),
+        {ok, State} = vm_util:get_room_state(Room, Domain),
 
         State1 = case maps:find(<<"max_durations">>, DataJSON) of
         {ok, MaxDuration} when
@@ -205,7 +208,7 @@ process_event(Data) ->
         _ -> State4
         end,
 
-        State /= State5 andalso vm_util:set_room_state(Room, MucDomain, State5);
+        State /= State5 andalso vm_util:set_room_state(Room, Domain, State5);
     _ ->
         ok
     end,
