@@ -166,7 +166,8 @@
     av_moderation_actors    = #{} :: #{binary() => binary()},
     pinned_tiles            = [] :: [binary()],
     tileview_max_columns    = 0 :: non_neg_integer(),
-    whiteboard_owner        = <<"">> :: binary()
+    whiteboard_owner        = <<"">> :: binary(),
+    whiteboard_user_visible = true :: boolean()
 }).
 
 -type users() :: #{ljid() => #user{}}.

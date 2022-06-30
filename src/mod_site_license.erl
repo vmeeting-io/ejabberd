@@ -195,16 +195,19 @@ process_event(Data) ->
         _ -> State3
         end,
 
-        State5 = case maps:find(<<"whiteboard_owner">>, DataJSON) of
-        {ok, WhiteboardOwner} when State4#state.whiteboard_owner /= WhiteboardOwner ->
-            ?INFO_MSG("process_event: whitboard_owner = ~p", [WhiteboardOwner]),
+        State5 = case maps:find(<<"whiteboard">>, DataJSON) of
+        {ok, #{<<"owner">> := WhiteboardOwner, <<"userVisible">> := WhiteboardUserVisible}}
+        when State4#state.whiteboard_owner /= WhiteboardOwner orelse
+             State4#state.whiteboard_user_visible /= WhiteboardUserVisible ->
+            ?INFO_MSG("process_event: whitboard_owner = ~p, whiteboard_user_visible = ~p", [WhiteboardOwner, WhiteboardUserVisible]),
             JsonMsg3 = #{
                 type => <<"whiteboard">>,
-                owner => WhiteboardOwner
+                owner => WhiteboardOwner,
+                userVisible => WhiteboardUserVisible
             },
             ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg3]),
             mod_muc_room:broadcast_json_msg(State4, <<"">>, JsonMsg3),
-            State4#state{whiteboard_owner = WhiteboardOwner};
+            State4#state{whiteboard_owner = WhiteboardOwner, whiteboard_user_visible = WhiteboardUserVisible};
         _ -> State4
         end,
 
