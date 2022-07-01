@@ -86,7 +86,7 @@ on_join_room(State, _ServerHost, Packet, JID, _RoomID, Nick) ->
             JsonMsg2 = jiffy:encode(#{
                 type => <<"whiteboard">>,
                 owner => State#state.whiteboard_owner,
-                user_visible => State#state.whiteboard_user_visible
+                userVisible => State#state.whiteboard_user_visible
             }),
             ejabberd_router:route(#message{
                 to = JID,
