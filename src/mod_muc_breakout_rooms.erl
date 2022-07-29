@@ -300,6 +300,7 @@ create_breakout_room(State, RoomJid, Subject) ->
     Body = #{
         name => Name,
         main_room => State#state.room_id,
+        meeting_id => RandUUID,
         subject => Subject
     },
     case httpc:request(post, {Url, Headers, ?CONTENT_TYPE, jiffy:encode(Body)}, [], []) of

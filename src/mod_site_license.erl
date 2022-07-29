@@ -112,9 +112,12 @@ process_event(Data) ->
     { RoomName, SiteID } = vm_util:split_room_and_site(maps:get(<<"room_name">>, DataJSON)),
     RoomNameEnc = vm_util:percent_encode(RoomName),
     Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
-    MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
-    RoomPID = mod_muc_admin:get_room_pid(Room, MucDomain),
-    ?INFO_MSG("process_event: ~ts ~ts ~p", [Room, MucDomain, RoomPID]),
+    Domain = case maps:find(<<"main_room">>, DataJSON) of
+    {ok, _} -> mod_muc_breakout_rooms:breakout_room_muc();
+    _ -> gen_mod:get_module_opt(global, mod_muc, host)
+    end,
+    RoomPID = mod_muc_admin:get_room_pid(Room, Domain),
+    ?INFO_MSG("process_event: ~ts ~ts ~p", [Room, Domain, RoomPID]),
 
     case maps:find(<<"delete_yn">>, DataJSON) of
     {ok, true} when RoomPID /= room_not_found, RoomPID /= invalid_service ->
@@ -122,7 +125,7 @@ process_event(Data) ->
         mod_muc_admin:change_room_option(RoomPID, persistent, false),
         destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ when RoomPID /= room_not_found, RoomPID /= invalid_service ->
-        {ok, State} = vm_util:get_room_state(Room, MucDomain),
+        {ok, State} = vm_util:get_room_state(Room, Domain),
 
         State1 = case maps:find(<<"max_durations">>, DataJSON) of
         {ok, MaxDuration} when
@@ -188,7 +191,23 @@ process_event(Data) ->
         _ -> State3
         end,
 
-        State /= State4 andalso vm_util:set_room_state(Room, MucDomain, State4);
+        State5 = case maps:find(<<"whiteboard">>, DataJSON) of
+        {ok, #{<<"owner">> := WhiteboardOwner, <<"userVisible">> := WhiteboardUserVisible}}
+        when State4#state.whiteboard_owner /= WhiteboardOwner orelse
+             State4#state.whiteboard_user_visible /= WhiteboardUserVisible ->
+            ?INFO_MSG("process_event: whitboard_owner = ~p, whiteboard_user_visible = ~p", [WhiteboardOwner, WhiteboardUserVisible]),
+            JsonMsg3 = #{
+                type => <<"whiteboard">>,
+                owner => WhiteboardOwner,
+                userVisible => WhiteboardUserVisible
+            },
+            ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg3]),
+            mod_muc_room:broadcast_json_msg(State4, <<"">>, JsonMsg3),
+            State4#state{whiteboard_owner = WhiteboardOwner, whiteboard_user_visible = WhiteboardUserVisible};
+        _ -> State4
+        end,
+
+        State /= State5 andalso vm_util:set_room_state(Room, Domain, State5);
     _ ->
         ok
     end,
