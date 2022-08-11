@@ -155,7 +155,7 @@ get_participants(RoomJid) ->
     % ?INFO_MSG("get_participants: ~ts", [jid:to_string(RoomJid)]),
     case vm_util:get_state_from_jid(RoomJid) of
     {ok, State} ->
-        maps:fold(fun(K, V, Acc) ->
+        Participants = maps:fold(fun(K, V, Acc) ->
             % Filter focus as we keep it as a hidden participant
             case K of
             {<<"focus">>, _, _} -> Acc;
@@ -172,10 +172,11 @@ get_participants(RoomJid) ->
                     displayName => DisplayName
                 }, Acc)
             end
-        end, #{}, State#state.users);
+        end, #{}, State#state.users),
+        { ok, State, Participants };
     _ ->
         ?WARNING_MSG("~ts state not found.", [jid:to_string(RoomJid)]),
-        #{}
+        { ok, #state{}, #{} }
     end.
 
 update_breakout_rooms(RoomJid) ->
@@ -189,17 +190,20 @@ update_breakout_rooms(RoomJid) ->
 
             RealJid = vm_util:internal_room_jid_match_rewrite(MainRoomJid),
             RealNode = RealJid#jid.luser,
-            MainParticipants = get_participants(MainRoomJid),
+            { ok, MainState, MainParticipants } = get_participants(MainRoomJid),
+            Name = case MainState#state.subject of
+                Subj when Subj /= [] -> (lists:nth(1, Subj))#text.data;
+                _ -> RealNode end,
             Rooms = #{ RealNode => #{
                 isMainRoom => true,
                 id => RealNode,
                 jid => jid:to_string(RealJid),
-                name => RealNode,
+                name => Name,
                 participants => MainParticipants
             }},
 
             BreakoutParticipants = maps:fold(fun(BreakoutJid, _, Acc) ->
-                Participants = get_participants(BreakoutJid),
+                { ok, _, Participants } = get_participants(BreakoutJid),
                 maps:put(BreakoutJid, Participants, Acc)
             end, #{}, Data2#data.breakout_rooms),
             Rooms2 = maps:fold(fun(BreakoutJid, V, Acc) ->
