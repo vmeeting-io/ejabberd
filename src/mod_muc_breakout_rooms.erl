@@ -399,12 +399,23 @@ destroy_breakout_room(RoomJid, Message) ->
 destroy_breakout_room(RoomJid) ->
     destroy_breakout_room(RoomJid, <<"destroyed_by_host">>).
 
+check_subject(#message{subject = [_|_] = Subj, body = [],
+		       thread = undefined}) ->
+    Subj;
+check_subject(_) ->
+    [].
+
 % Handling events
 process_message(#message{
     type = Type,
-    to = #jid{lserver = Host} = To,
+    to = #jid{lserver = Host, lresource = Node} = To,
     from = From
 } = Packet) when Type /= error ->
+    case check_subject(Packet) of
+    Subj when Subj /= [] andalso Node == <<>> ->
+        broadcast_breakout_rooms(To);
+    _ -> ok end,
+
     BreakoutHost = breakout_room_muc(),
     case Host == BreakoutHost andalso
          vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
