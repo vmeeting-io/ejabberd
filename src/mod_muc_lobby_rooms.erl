@@ -8,6 +8,8 @@
 -include("mod_muc_room.hrl").
 -include("vmeeting_common.hrl").
 
+-define(VMAPI_BASE, "http://vmapi:5000/").
+-define(CONTENT_TYPE, "application/json").
 -define(DISPLAY_NAME_REQUIRED_FEATURE, <<"http://jitsi.org/protocol/lobbyrooms#displayname_required">>).
 -define(NOTIFY_LOBBY_ENABLED, <<"LOBBY-ENABLED">>).
 -define(NOTIFY_JSON_MESSAGE_TYPE, <<"lobby-notify">>).
@@ -79,10 +81,20 @@ on_room_destroyed(State, _ServerHost, _Room, _Host) ->
 on_change_state(State, FromJid, Options) ->
     case lists:keyfind(membersonly, 1, Options) of
     {_, Value} ->
+        ?INFO_MSG("mod_muc_lobby_rooms:on_change_state '~ts', ~ts, ~ts", [Value, State#state.room, State#state.room_id]),
         #state{room = Room, server_host = ServerHost} = State,
         LobbyRoom = <<Room/binary, "@", "lobby.", ServerHost/binary>>,
         LobbyHost = <<"lobby.", ServerHost/binary>>,
         {ok, Inviter} = maps:find(jid:tolower(FromJid), State#state.users),
+
+        {_, SiteID} = vm_util:split_room_and_site(State#state.room),
+        Url = ?VMAPI_BASE ++ "sites/"
+            ++ binary:bin_to_list(SiteID) ++ "/conferences/"
+            ++ binary:bin_to_list(State#state.room_id),
+        Token = gen_mod:get_module_opt(global, mod_site_license, vmeeting_api_token),
+        Headers = [{"Authorization", "Bearer " ++ Token}],
+        ReqBody = jiffy:encode(#{lobby => Value}),
+        httpc:request(patch, {Url, Headers, ?CONTENT_TYPE, ReqBody}, [], [{sync, false}]),
 
         case Value of
         true ->
