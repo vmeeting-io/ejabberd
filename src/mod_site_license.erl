@@ -137,41 +137,42 @@ process_event(Data) ->
             TimeElapsed = erlang:system_time(second) - CreatedTimeStamp div 1000,
             TimeRemained = MaxDuration - TimeElapsed,
 
-            mod_muc_admin:change_room_option(RoomPID, time_remained, TimeRemained),
+            Config1 = State#state.config#config{time_remained = TimeRemained},
             destroy_room_after_secs(RoomPID, <<"duration_expired">>, TimeRemained),
-            State#state{max_durations = MaxDuration};
+            State#state{max_durations = MaxDuration, config = Config1};
         _ ->
             State
         end,
 
-        case maps:find(<<"max_occupants">>, DataJSON) of
+        State2 = case maps:find(<<"max_occupants">>, DataJSON) of
         {ok, MaxOccupants} ->
             MaxUsers = if MaxOccupants < 0 -> ?MAX_USERS_DEFAULT;
                 true -> MaxOccupants end,
             ?INFO_MSG("process_event: max_occupants = ~p", [MaxUsers]),
-            mod_muc_admin:change_room_option(RoomPID, max_users, MaxUsers);
+            Config2 = State1#state.config#config{max_users = MaxUsers},
+            State1#state{config = Config2};
         _ ->
-            ok
+            State1
         end,
         
-        State2 = case maps:find(<<"face_detect">>, DataJSON) of
-        {ok, Enabled} when State1#state.face_detect /= Enabled ->
+        State3 = case maps:find(<<"face_detect">>, DataJSON) of
+        {ok, Enabled} when State2#state.face_detect /= Enabled ->
             ?INFO_MSG("process_event: face_detect = ~p", [Enabled]),
             JsonMsg = #{
                 type => <<"features/face-detect/update">>,
                 facedetect => Enabled
             },
             ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg]),
-            mod_muc_room:broadcast_json_msg(State1, <<"">>, JsonMsg),
-            State1#state{face_detect = Enabled};
-        _ -> State1
+            mod_muc_room:broadcast_json_msg(State2, <<"">>, JsonMsg),
+            State2#state{face_detect = Enabled};
+        _ -> State2
         end,
         
         Keys = [<<"pinned_tiles">>, <<"tileview_max_columns">>],
-        State3 = case maps:with(Keys, DataJSON) of
+        State4 = case maps:with(Keys, DataJSON) of
         #{ <<"pinned_tiles">> := Pinned, <<"tileview_max_columns">> := TileViewMaxColumns }
-        when State2#state.pinned_tiles /= Pinned orelse 
-             State2#state.tileview_max_columns /= TileViewMaxColumns ->
+        when State3#state.pinned_tiles /= Pinned orelse 
+             State3#state.tileview_max_columns /= TileViewMaxColumns ->
             ?INFO_MSG("process_event: pinned_tiles = ~p, tileview_max_columns = ~p", [Pinned, TileViewMaxColumns]),
             JsonMsg2 = #{
                 type => <<"features/settings/tileview">>,
@@ -179,22 +180,22 @@ process_event(Data) ->
                 tileview_max_columns => TileViewMaxColumns
             },
             ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg2]),
-            mod_muc_room:broadcast_json_msg(State2, <<"">>, JsonMsg2),
-            State2#state{pinned_tiles = Pinned, tileview_max_columns = TileViewMaxColumns};
-        _ -> State2
-        end,
-
-        State4 = case maps:find(<<"_id">>, DataJSON) of
-        {ok, RoomID} when State3#state.room_id /= RoomID ->
-            ?INFO_MSG("process_event: room_id = ~p", [RoomID]),
-            State3#state{room_id = RoomID};
+            mod_muc_room:broadcast_json_msg(State3, <<"">>, JsonMsg2),
+            State3#state{pinned_tiles = Pinned, tileview_max_columns = TileViewMaxColumns};
         _ -> State3
         end,
 
-        State5 = case maps:find(<<"whiteboard">>, DataJSON) of
+        State5 = case maps:find(<<"_id">>, DataJSON) of
+        {ok, RoomID} when State4#state.room_id /= RoomID ->
+            ?INFO_MSG("process_event: room_id = ~p", [RoomID]),
+            State4#state{room_id = RoomID};
+        _ -> State4
+        end,
+
+        State6 = case maps:find(<<"whiteboard">>, DataJSON) of
         {ok, #{<<"owner">> := WhiteboardOwner, <<"userVisible">> := WhiteboardUserVisible}}
-        when State4#state.whiteboard_owner /= WhiteboardOwner orelse
-             State4#state.whiteboard_user_visible /= WhiteboardUserVisible ->
+        when State5#state.whiteboard_owner /= WhiteboardOwner orelse
+             State5#state.whiteboard_user_visible /= WhiteboardUserVisible ->
             ?INFO_MSG("process_event: whitboard_owner = ~p, whiteboard_user_visible = ~p", [WhiteboardOwner, WhiteboardUserVisible]),
             JsonMsg3 = #{
                 type => <<"whiteboard">>,
@@ -202,12 +203,12 @@ process_event(Data) ->
                 userVisible => WhiteboardUserVisible
             },
             ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg3]),
-            mod_muc_room:broadcast_json_msg(State4, <<"">>, JsonMsg3),
-            State4#state{whiteboard_owner = WhiteboardOwner, whiteboard_user_visible = WhiteboardUserVisible};
-        _ -> State4
+            mod_muc_room:broadcast_json_msg(State5, <<"">>, JsonMsg3),
+            State5#state{whiteboard_owner = WhiteboardOwner, whiteboard_user_visible = WhiteboardUserVisible};
+        _ -> State5
         end,
 
-        State /= State5 andalso vm_util:set_room_state(Room, Domain, State5);
+        State /= State6 andalso vm_util:set_room_state(Room, Domain, State6);
     _ ->
         ok
     end,
