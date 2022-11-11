@@ -101,9 +101,7 @@ process_notice(Data) ->
 process_event(Data) ->
     DataJSON = jiffy:decode(Data, [return_maps]),
     % ?INFO_MSG("decoded data: ~p", [DataJSON]),
-    {match, [SiteID, RoomName]} = re:run(maps:get(<<"room_name">>, DataJSON),
-                                        "\\[(?<site>\\w+)\\](?<room>.+)",
-                                        [{capture, [site, room], binary}]),
+    { RoomName, SiteID } = vm_util:split_room_and_site(maps:get(<<"room_name">>, DataJSON)),
     RoomNameEnc = vm_util:percent_encode(RoomName),
     Room = <<"[", SiteID/binary, "]", RoomNameEnc/binary>>,
     MucDomain = gen_mod:get_module_opt(global, mod_muc, host),
