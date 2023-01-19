@@ -207,8 +207,21 @@ process_event(Data) ->
             State5#state{whiteboard_owner = WhiteboardOwner, whiteboard_user_visible = WhiteboardUserVisible};
         _ -> State5
         end,
+        
+        State7 = case maps:find(<<"stt_enabled">>, DataJSON) of
+        {ok, Enabled2} when State6#state.stt_enabled /= Enabled2 ->
+            ?INFO_MSG("process_event: stt_enabled = ~p", [Enabled2]),
+            JsonMsg4 = #{
+                type => <<"features/stt-enabled">>,
+                sttenabled => Enabled2
+            },
+            ?INFO_MSG("broadcast_json_msg: ~p", [JsonMsg4]),
+            mod_muc_room:broadcast_json_msg(State6, <<"">>, JsonMsg4),
+            State6#state{stt_enabled = Enabled2};
+        _ -> State6
+        end,
 
-        State /= State6 andalso vm_util:set_room_state(Room, Domain, State6);
+        State /= State7 andalso vm_util:set_room_state(Room, Domain, State7);
     _ ->
         ok
     end,
