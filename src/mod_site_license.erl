@@ -18,6 +18,12 @@
 
 start(Host, _Opts) ->
     ?INFO_MSG("mod_site_license:start ~ts", [Host]),
+
+    try ets:new(vm_rooms, [set, named_table, public])
+    catch
+        _:badarg -> ok
+    end,
+
     ejabberd_hooks:add(vm_start_room, Host, ?MODULE, on_start_room, 90),
     ejabberd_hooks:add(vm_pre_disco_info, Host, ?MODULE, on_vm_pre_disco_info, 100),
     ok.
@@ -120,9 +126,14 @@ process_event(Data) ->
     ?INFO_MSG("process_event: ~ts ~ts ~p", [Room, Domain, RoomPID]),
 
     case maps:find(<<"delete_yn">>, DataJSON) of
+    {ok, false} when RoomPID == room_not_found ->
+        ?INFO_MSG("process_event: delete_yn = false", []),
+        RoomJID = <<Room/binary, "@", Domain/binary>>,
+        ets:insert(vm_rooms, { RoomJID, DataJSON });
     {ok, true} when RoomPID /= room_not_found, RoomPID /= invalid_service ->
         ?INFO_MSG("process_event: delete_yn = true", []),
         mod_muc_admin:change_room_option(RoomPID, persistent, false),
+        ets:delete(vm_rooms, <<Room/binary, "@", Domain/binary>>),
         destroy_room(RoomPID, <<"destroyed_by_host">>);
     _ when RoomPID /= room_not_found, RoomPID /= invalid_service ->
         {ok, State} = vm_util:get_room_state(Room, Domain),

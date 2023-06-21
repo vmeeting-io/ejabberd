@@ -55,36 +55,50 @@ mod_doc() ->
 mod_opt_type(whitelist_domains) ->
     econf:list(econf:binary(), [unique]).
 
+lobby_host() ->
+    ServerHost = ejabberd_config:get_myname(),
+    <<"lobby.", ServerHost/binary>>.
+
 -spec whitelist_domains(gen_mod:opts() | global | binary()) -> [binary()].
 whitelist_domains(Opts) when is_map(Opts) ->
     gen_mod:get_opt(whitelist_domains, Opts);
 whitelist_domains(Host) ->
     gen_mod:get_module_opt(Host, mod_muc_lobby_rooms, whitelist_domains).
 
-on_start_room(State, ServerHost, Room, _Host) ->
-    case State#state.config#config.members_only of
+on_start_room(State, _ServerHost, Room, Host) ->
+    LobbyHost = lobby_host(),
+    IsLobbyRoom = Host == LobbyHost,
+    State1 = case IsLobbyRoom of
+    true -> 
+        Config = State#state.config#config{members_only = false, persistent = true},
+        State#state{config = Config};
+    _ -> State end,
+
+    % ?INFO_MSG("mod_muc_lobby_rooms:on_start_room ~ts, ~ts, ~p, ~p", [Room, Host, IsLobbyRoom, State1#state.config#config.members_only]),
+    case State1#state.config#config.members_only of
     true ->
-        LobbyRoom = <<Room/binary, "@", "lobby.", ServerHost/binary>>,
-        State#state{lobbyroom = LobbyRoom};
+        LobbyRoom = <<Room/binary, "@", LobbyHost/binary>>,
+        State1#state{lobbyroom = LobbyRoom};
     false ->
-        State
+        State1
     end.
 
-on_room_destroyed(State, _ServerHost, _Room, _Host) ->
-    case State#state.lobbyroom of
-    <<>> ->
+on_room_destroyed(State, ServerHost, Room, _Host) ->
+    % ?INFO_MSG("mod_muc_lobby_rooms:on_room_destroyed ~ts, ~ts", [ServerHost, Room]),
+    case mod_muc:find_online_room(Room, lobby_host()) of
+    error ->
         ok;
-    LobbyRoom ->
-        destroy_lobby_room(LobbyRoom, nil)
+    _ ->
+        destroy_lobby_room(State#state.lobbyroom, nil)
     end.
 
 on_change_state(State, FromJid, Options) ->
     case lists:keyfind(membersonly, 1, Options) of
     {_, Value} ->
         ?INFO_MSG("mod_muc_lobby_rooms:on_change_state '~ts', ~ts, ~ts", [Value, State#state.room, State#state.room_id]),
-        #state{room = Room, server_host = ServerHost} = State,
-        LobbyRoom = <<Room/binary, "@", "lobby.", ServerHost/binary>>,
-        LobbyHost = <<"lobby.", ServerHost/binary>>,
+        #state{room = Room} = State,
+        LobbyHost = lobby_host(),
+        LobbyRoom = <<Room/binary, "@", LobbyHost/binary>>,
         {ok, Inviter} = maps:find(jid:tolower(FromJid), State#state.users),
 
         {_, SiteID} = vm_util:split_room_and_site(State#state.room),
@@ -131,21 +145,36 @@ disco_local_identity(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 
 % Create muc_lobby_rooms object for the joined user
-on_pre_join_room(#state{room = RoomName, config = Config} = State,
+on_pre_join_room(#state{room = RoomName, host = Host, config = Config} = State,
         _ServerHost, Packet, FromJid, _Nick) ->
     MucSubTag = xmpp:get_subtag(Packet, #muc{}),
+    EmailSubTag = xmpp:get_subtag(Packet, #email{}),
     IsJoin = MucSubTag /= false,
     IsHeathcheck = vm_util:is_healthcheck_room(RoomName),
     IsMemberOnly = Config#config.members_only,
 
     case {IsJoin, IsHeathcheck, IsMemberOnly} of
     {true, false, true} ->
+        ?INFO_MSG("mod_muc_lobby_rooms:on_pre_join_room ~ts@~ts, ~ts", [RoomName, Host, jid:encode(FromJid)]),
         IsWhitelist = lists:member(FromJid#jid.server, whitelist_domains(global)),
         {_, _, Password} = MucSubTag,
+
+        IsMailOwner = case ets:lookup(vm_rooms, <<RoomName/binary, "@", Host/binary>>) of
+        [{ _, Data }] when EmailSubTag /= false ->
+            {_, Email} = EmailSubTag,
+            case maps:find(<<"mail_owner">>, Data) of
+            {ok, MailOwner} when MailOwner == Email -> true;
+            _ -> false
+            end;
+        _ ->
+            false
+        end,
+
         IsPasswordMatch = Config#config.password_protected == true
                         andalso Password == Config#config.password,
 
-        case IsWhitelist orelse IsPasswordMatch of
+        % ?INFO_MSG("mod_muc_lobby_rooms:on_pre_join_room ~ts, ~ts, ~ts", [IsWhitelist, IsMailOwner, IsPasswordMatch]),
+        case IsWhitelist orelse IsMailOwner orelse IsPasswordMatch of
         true ->
             BareLjid = jid:tolower(jid:remove_resource(FromJid)),
             Affiliations = State#state.affiliations,
@@ -162,9 +191,9 @@ on_pre_join_room(State, _ServerHost, _Packet, _FromJid, _Nick) ->
     State.
 
 on_muc_invite(State, From, To, _Reason, _Pkt) ->
+    % ?INFO_MSG("mod_muc_lobby_rooms:on_muc_invite ~ts, ~ts, ~ts", [State#state.room, jid:encode(From), jid:encode(To)]),
     Room = State#state.room,
-    ServerHost = State#state.server_host,
-    LobbyHost = <<"lobby.", ServerHost/binary>>,
+    LobbyHost = lobby_host(),
 
     try
         {ok, LobbyRoomState} = vm_util:get_room_state(Room, LobbyHost),
@@ -219,7 +248,7 @@ destroy_lobby_room(LobbyRoom, _NewJid, Message) ->
         if RoomPID == room_not_found; RoomPID == invalid_service ->
             ok;
         true ->
-            mod_muc_admin:change_room_option(RoomPID, persistent, false),
+            % mod_muc_admin:change_room_option(RoomPID, persistent, false),
             mod_muc_room:destroy(RoomPID, Message)
         end
     end.
@@ -269,4 +298,4 @@ notify_lobby_access(Room, FromNick, ToNick, Name, Granted) ->
     mod_muc_room:broadcast_json_msg(Room, FromNick, JsonMsg).
 
 log_err_stacktrace(ErrType, Err) ->
-    ?INFO_MSG("[~p:~p] ~p~n", [?MODULE, ?FUNCTION_NAME, {ErrType, Err, erlang:get_stacktrace()}]).
+    ?INFO_MSG("[~p:~p] ~p~n", [?MODULE, ?FUNCTION_NAME, {ErrType, Err}]).
