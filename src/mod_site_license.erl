@@ -232,7 +232,20 @@ process_event(Data) ->
         _ -> State6
         end,
 
-        State /= State7 andalso vm_util:set_room_state(Room, Domain, State7);
+        % State /= State7 andalso vm_util:set_room_state(Room, Domain, State7);
+
+        State8 = case maps:find(<<"password">>, DataJSON) of
+        {ok, Password} when State7#state.config#config.password /= Password andalso
+                            RoomPID /= room_not_found andalso RoomPID /= invalid_service ->
+            ?INFO_MSG("process_event: password = ~p", [Password]),
+            NewConfig = State7#state.config#config{
+                password = Password,
+                password_protected = Password /= <<"">>},
+            State7#state{config = NewConfig};
+        _ -> State7
+        end,
+
+        State /= State8 andalso vm_util:set_room_state(Room, Domain, State8);
     _ ->
         ok
     end,

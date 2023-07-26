@@ -557,6 +557,7 @@ route_to_room(Packet, ServerHost) ->
 			{error, notfound} when StartType == start ->
 			    case check_create_room(ServerHost, Host, Room, From) of
 				true ->
+                	?DEBUG("before start_new_room: ~n~ts", [xmpp:pp(Packet)]),
 				    Pass = extract_password(Packet),
 				    case start_new_room(RMod, Host, ServerHost, Room, Pass, From, Nick) of
 					{ok, Pid} ->
@@ -842,7 +843,7 @@ load_room(RMod, Host, ServerHost, Room) ->
     end.
 
 start_new_room(RMod, Host, ServerHost, Room, Pass, From, Nick) ->
-    ?DEBUG("Open new room: ~ts", [Room]),
+    ?DEBUG("Open new room: ~ts, ~ts", [Room, Pass]),
     DefRoomOpts = mod_muc_opt:default_room_options(ServerHost),
     DefRoomOpts2 = add_password_options(Pass, DefRoomOpts),
     start_room(RMod, Host, ServerHost, Room, DefRoomOpts2, From, Nick).

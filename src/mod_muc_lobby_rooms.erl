@@ -155,8 +155,9 @@ on_pre_join_room(#state{room = RoomName, host = Host, config = Config} = State,
 
     case {IsJoin, IsHeathcheck, IsMemberOnly} of
     {true, false, true} ->
-        ?INFO_MSG("mod_muc_lobby_rooms:on_pre_join_room ~ts@~ts, ~ts", [RoomName, Host, jid:encode(FromJid)]),
-        IsWhitelist = lists:member(FromJid#jid.server, whitelist_domains(global)),
+        ?DEBUG("mod_muc_lobby_rooms:on_pre_join_room ~ts@~ts, ~ts, ~n~ts", [RoomName, Host, jid:encode(FromJid), xmpp:pp(Packet)]),
+        IsWhitelist = lists:member(FromJid#jid.server, whitelist_domains(global)) orelse
+            lists:member(FromJid#jid.user, ?WHITE_LIST_USERS),
         {_, _, Password} = MucSubTag,
 
         IsMailOwner = case ets:lookup(vm_rooms, <<RoomName/binary, "@", Host/binary>>) of
@@ -170,19 +171,34 @@ on_pre_join_room(#state{room = RoomName, host = Host, config = Config} = State,
             false
         end,
 
-        IsPasswordMatch = Config#config.password_protected == true
-                        andalso Password == Config#config.password,
+        % IsPasswordMatch = Config#config.password_protected == true
+        %                 andalso Password == Config#config.password,
 
-        % ?INFO_MSG("mod_muc_lobby_rooms:on_pre_join_room ~ts, ~ts, ~ts", [IsWhitelist, IsMailOwner, IsPasswordMatch]),
-        case IsWhitelist orelse IsMailOwner orelse IsPasswordMatch of
+        % ?INFO_MSG("mod_muc_lobby_rooms:on_pre_join_room Password = ~ts", [Password]),
+        % case IsWhitelist orelse IsMailOwner orelse IsPasswordMatch of
+        Affiliations = State#state.affiliations,
+        BareLjid = jid:tolower(jid:remove_resource(FromJid)),
+        State1 = case IsMailOwner of
         true ->
-            BareLjid = jid:tolower(jid:remove_resource(FromJid)),
-            Affiliations = State#state.affiliations,
-            Affiliations1 = maps:put(BareLjid, {member, <<>>}, Affiliations),
-
-            State#state{affiliations = Affiliations1};
+            Affiliations1 = maps:put(BareLjid, {owner, <<>>}, Affiliations),
+            NewConfig = case Password /= undefined
+                    andalso (Config#config.password_protected /= true
+                    orelse Password /= Config#config.password) of
+                true -> 
+                    State#state.config#config{
+                        password = Password,
+                        password_protected = Password /= <<"">>};
+                _ -> State#state.config end,
+            State#state{affiliations = Affiliations1, config = NewConfig};
+            % State#state{affiliations = Affiliations1};
         _ ->
-            State
+            case IsWhitelist of
+            true ->
+                Affiliations2 = maps:put(BareLjid, {member, <<>>}, Affiliations),
+                State#state{affiliations = Affiliations2};
+            _ ->
+                State
+            end
         end;
     _ ->
         State
@@ -191,7 +207,7 @@ on_pre_join_room(State, _ServerHost, _Packet, _FromJid, _Nick) ->
     State.
 
 on_muc_invite(State, From, To, _Reason, _Pkt) ->
-    % ?INFO_MSG("mod_muc_lobby_rooms:on_muc_invite ~ts, ~ts, ~ts", [State#state.room, jid:encode(From), jid:encode(To)]),
+    ?INFO_MSG("mod_muc_lobby_rooms:on_muc_invite ~ts, ~ts, ~ts", [State#state.room, jid:encode(From), jid:encode(To)]),
     Room = State#state.room,
     LobbyHost = lobby_host(),
 
@@ -209,6 +225,7 @@ on_muc_invite(State, From, To, _Reason, _Pkt) ->
     end.
 
 on_kick_participant(Ujid, Jid, State) ->
+    ?INFO_MSG("mod_muc_lobby_rooms:on_kick_participant ~ts, ~ts, ~ts", [State#state.room, jid:encode(Ujid), jid:encode(Jid)]),
     MainRoomPid = State#state.main_room_pid,
     if is_pid(MainRoomPid) ->
         try
