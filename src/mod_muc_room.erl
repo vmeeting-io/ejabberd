@@ -4284,6 +4284,7 @@ iq_disco_info_extras(Lang, StateData, Static) ->
 		      end
 	      end,
     Fs1 = [{roomname, Config#config.title},
+	   {created_timestamp, StateData#state.created_timestamp},
 	   {description, Config#config.description},
 	%    {contactjid, get_owners(StateData)},
 	   {changesubject, Config#config.allow_change_subj},
