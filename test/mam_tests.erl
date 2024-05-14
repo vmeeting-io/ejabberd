@@ -3,7 +3,7 @@
 %%% Created : 14 Nov 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -368,7 +368,6 @@ mucsub_slave(Config) ->
 	end, lists:seq(1, 5)),
     RSM = ?match(#iq{from = MyJIDBare, id = I, type = result,
 		     sub_els = [#mam_fin{xmlns = ?NS_MAM_2,
-					 id = QID,
 					 rsm = RSM,
 					 complete = true}]}, recv_iq(Config), RSM),
     match_rsm_count(RSM, 5),
@@ -455,7 +454,7 @@ recv_archived_messages(Config, From, To, QID, Range) ->
     MyJID = my_jid(Config),
     lists:foreach(
       fun(N) ->
-	      ct:comment("Retreiving ~pth message in range ~p",
+	      ct:comment("Retrieving ~pth message in range ~p",
 			 [N, Range]),
               Body = xmpp:mk_text(integer_to_binary(N)),
               #message{to = MyJID,
@@ -488,7 +487,6 @@ recv_fin(Config, I, QueryID, NS, IsComplete) when NS == ?NS_MAM_1; NS == ?NS_MAM
     ct:comment("Receiving fin iq for namespace '~s'", [NS]),
     #iq{type = result, id = I,
 	sub_els = [#mam_fin{xmlns = NS,
-			    id = QueryID,
 			    complete = Complete,
 			    rsm = RSM}]} = recv_iq(Config),
     ct:comment("Checking if complete is ~s", [IsComplete]),
@@ -553,7 +551,6 @@ recv_messages_from_room(Config, Range) ->
       end, Range),
     #iq{from = Room, id = I, type = result,
 	sub_els = [#mam_fin{xmlns = ?NS_MAM_2,
-			    id = QID,
 			    rsm = RSM,
 			    complete = true}]} = recv_iq(Config),
     match_rsm_count(RSM, length(Range)).
@@ -645,7 +642,8 @@ query_rsm_after(Config, From, To, NS) ->
 query_rsm_before(Config, From, To) ->
     lists:foreach(
       fun(NS) ->
-	      query_rsm_before(Config, From, To, NS)
+	  query_rsm_before(Config, From, To, NS),
+	  query_last_message(Config, From, To, NS)
       end, ?VERSIONS).
 
 query_rsm_before(Config, From, To, NS) ->
@@ -663,6 +661,16 @@ query_rsm_before(Config, From, To, NS) ->
 	      match_rsm_count(RSM, 5),
 	      Last
       end, <<"">>, lists:reverse([lists:seq(1, N) || N <- lists:seq(0, 5)])).
+
+query_last_message(Config, From, To, NS) ->
+    ct:comment("Retrieving last message", []),
+    QID = p1_rand:get_string(),
+    Query = #mam_query{xmlns = NS, id = QID,
+		       rsm = #rsm_set{before = <<>>, max = 1}},
+    ID = send_query(Config, Query),
+    recv_archived_messages(Config, From, To, QID, [5]),
+    RSM = ?match(#rsm_set{} = RSM, recv_fin(Config, ID, QID, NS, false), RSM),
+    match_rsm_count(RSM, 5).
 
 match_rsm_count(#rsm_set{count = undefined}, _) ->
     %% The backend doesn't support counting

@@ -5,7 +5,7 @@
 %%% Created : 20 May 2008 by Badlop <badlop@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -41,6 +41,7 @@
 	 get_tags_commands/0,
 	 get_tags_commands/1,
 	 register_commands/1,
+	 register_commands/2,
 	 unregister_commands/1,
 	 get_commands_spec/0,
 	 get_commands_definition/0,
@@ -72,7 +73,7 @@ get_commands_spec() ->
                                         "documentation should be stored",
                                         "Regexp matching names of commands or modules "
                                         "that will be included inside generated document",
-                                        "Comma separated list of languages (chosen from java, perl, xmlrpc, json)"
+                                        "Comma separated list of languages (chosen from `java`, `perl`, `xmlrpc`, `json`) "
                                         "that will have example invocation include in markdown document"],
                            result_desc = "0 if command failed, 1 when succeeded",
                            args_example = ["/home/me/docs/api.html", "mod_admin", "java,json"],
@@ -85,11 +86,23 @@ get_commands_spec() ->
                            args_desc = ["Path to file where generated "
                                         "documentation should be stored",
                                         "Regexp matching names of commands or modules "
-                                        "that will be included inside generated document",
-                                        "Comma separated list of languages (chosen from java, perl, xmlrpc, json)"
+                                        "that will be included inside generated document, "
+                                        "or `runtime` to get commands registered at runtime",
+                                        "Comma separated list of languages (chosen from `java`, `perl`, `xmlrpc`, `json`) "
                                         "that will have example invocation include in markdown document"],
                            result_desc = "0 if command failed, 1 when succeeded",
                            args_example = ["/home/me/docs/api.html", "mod_admin", "java,json"],
+                           result_example = ok},
+        #ejabberd_commands{name = gen_markdown_doc_for_tags, tags = [documentation],
+                           desc = "Generates markdown documentation for ejabberd_commands",
+                           note = "added in 21.12",
+                           module = ejabberd_commands_doc, function = generate_tags_md,
+                           args = [{file, binary}],
+                           result = {res, rescode},
+                           args_desc = ["Path to file where generated "
+                                        "documentation should be stored"],
+                           result_desc = "0 if command failed, 1 when succeeded",
+                           args_example = ["/home/me/docs/tags.md"],
                            result_example = ok}].
 
 start_link() ->
@@ -129,15 +142,30 @@ code_change(_OldVsn, State, _Extra) ->
 -spec register_commands([ejabberd_commands()]) -> ok.
 
 register_commands(Commands) ->
+    register_commands(unknown, Commands).
+
+register_commands(Definer, Commands) ->
     lists:foreach(
       fun(Command) ->
               %% XXX check if command exists
-              mnesia:dirty_write(Command)
+              mnesia:dirty_write(register_command_prepare(Command, Definer))
               %% ?DEBUG("This command is already defined:~n~p", [Command])
       end,
       Commands),
     ejabberd_access_permissions:invalidate(),
     ok.
+
+
+
+
+register_command_prepare(Command, Definer) ->
+    Tags1 = Command#ejabberd_commands.tags,
+    Tags2 = case Command#ejabberd_commands.version of
+                0 -> Tags1;
+                Version -> Tags1 ++ [list_to_atom("v"++integer_to_list(Version))]
+            end,
+    Command#ejabberd_commands{definer = Definer, tags = Tags2}.
+
 
 -spec unregister_commands([ejabberd_commands()]) -> ok.
 

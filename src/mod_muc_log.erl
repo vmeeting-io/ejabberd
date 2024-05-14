@@ -5,7 +5,7 @@
 %%% Created : 12 Mar 2006 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -97,9 +97,9 @@ get_url(#state{room = Room, host = Host, server_host = ServerHost}) ->
 	URL ->
 	    case mod_muc_log_opt:dirname(ServerHost) of
 		room_jid ->
-		    {ok, <<URL/binary, $/, Room/binary, $@, Host/binary>>};
+		    {ok, <<URL/binary, $/, Room/binary, $@, Host/binary, $/>>};
 		room_name ->
-		    {ok, <<URL/binary, $/, Room/binary>>}
+		    {ok, <<URL/binary, $/, Room/binary, $/>>}
 	    end
     catch
 	error:{module_not_loaded, _, _} ->
@@ -811,8 +811,8 @@ get_roomconfig_text(members_by_default, Lang) ->
     tr(Lang, ?T("Default users as participants"));
 get_roomconfig_text(allow_change_subj, Lang) ->
     tr(Lang, ?T("Allow users to change the subject"));
-get_roomconfig_text(allow_private_messages, Lang) ->
-    tr(Lang, ?T("Allow users to send private messages"));
+get_roomconfig_text(allowpm, Lang) ->
+    tr(Lang, ?T("Who can send private messages"));
 get_roomconfig_text(allow_private_messages_from_visitors, Lang) ->
     tr(Lang, ?T("Allow visitors to send private messages to"));
 get_roomconfig_text(allow_query_users, Lang) ->
@@ -1021,7 +1021,7 @@ mod_doc() ->
            ?T("- URLs on messages and subjects are converted to hyperlinks."), "",
            ?T("- Timezone used on timestamps is shown on the log files."), "",
            ?T("- A custom link can be added on top of each page."), "",
-           ?T("The module depends on 'mod_muc'.")],
+           ?T("The module depends on _`mod_muc`_.")],
       opts =>
           [{access_log,
             #{value => ?T("AccessName"),
@@ -1043,7 +1043,7 @@ mod_doc() ->
            {dirname,
             #{value => "room_jid | room_name",
               desc =>
-                  ?T("Allows to configure the name of the room directory. "
+                  ?T("Configure the name of the room directory. "
                      "If set to 'room_jid', the room directory name will "
                      "be the full room JID. Otherwise, the room directory "
                      "name will be only the room name, not including the "

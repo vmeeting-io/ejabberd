@@ -5,7 +5,7 @@
 %%% Created : 24 Oct 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -62,32 +62,15 @@ start(Host, Opts) ->
     Mod = gen_mod:db_mod(Opts, ?MODULE),
     Mod:init(Host, Opts),
     init_cache(Mod, Host, Opts),
-    gen_iq_handler:add_iq_handler(ejabberd_local, Host,
-				  ?NS_LAST, ?MODULE, process_local_iq),
-    gen_iq_handler:add_iq_handler(ejabberd_sm, Host,
-				  ?NS_LAST, ?MODULE, process_sm_iq),
-    ejabberd_hooks:add(privacy_check_packet, Host, ?MODULE,
-		       privacy_check_packet, 30),
-    ejabberd_hooks:add(register_user, Host, ?MODULE,
-		       register_user, 50),
-    ejabberd_hooks:add(remove_user, Host, ?MODULE,
-		       remove_user, 50),
-    ejabberd_hooks:add(unset_presence_hook, Host, ?MODULE,
-		       on_presence_update, 50).
+    {ok, [{iq_handler, ejabberd_local, ?NS_LAST, process_local_iq},
+          {iq_handler, ejabberd_sm, ?NS_LAST, process_sm_iq},
+          {hook, privacy_check_packet, privacy_check_packet, 30},
+          {hook, register_user, register_user, 50},
+          {hook, remove_user, remove_user, 50},
+          {hook, unset_presence_hook, on_presence_update, 50}]}.
 
-stop(Host) ->
-    ejabberd_hooks:delete(register_user, Host, ?MODULE,
-			  register_user, 50),
-    ejabberd_hooks:delete(remove_user, Host, ?MODULE,
-			  remove_user, 50),
-    ejabberd_hooks:delete(unset_presence_hook, Host,
-			  ?MODULE, on_presence_update, 50),
-    ejabberd_hooks:delete(privacy_check_packet, Host, ?MODULE,
-			  privacy_check_packet, 30),
-    gen_iq_handler:remove_iq_handler(ejabberd_local, Host,
-				     ?NS_LAST),
-    gen_iq_handler:remove_iq_handler(ejabberd_sm, Host,
-				     ?NS_LAST).
+stop(_Host) ->
+    ok.
 
 reload(Host, NewOpts, OldOpts) ->
     NewMod = gen_mod:db_mod(NewOpts, ?MODULE),
@@ -344,20 +327,20 @@ mod_doc() ->
           [{db_type,
             #{value => "mnesia | sql",
               desc =>
-                  ?T("Same as top-level 'default_db' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`default_db`_ option, but applied to this module only.")}},
            {use_cache,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'use_cache' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`use_cache`_ option, but applied to this module only.")}},
            {cache_size,
             #{value => "pos_integer() | infinity",
               desc =>
-                  ?T("Same as top-level 'cache_size' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_size`_ option, but applied to this module only.")}},
            {cache_missed,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'cache_missed' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_missed`_ option, but applied to this module only.")}},
            {cache_life_time,
             #{value => "timeout()",
               desc =>
-                  ?T("Same as top-level 'cache_life_time' option, but applied to this module only.")}}]}.
+                  ?T("Same as top-level _`cache_life_time`_ option, but applied to this module only.")}}]}.

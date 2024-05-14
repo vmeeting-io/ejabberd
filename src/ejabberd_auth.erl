@@ -5,7 +5,7 @@
 %%% Created : 23 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -27,6 +27,8 @@
 -behaviour(gen_server).
 
 -author('alexey@process-one.net').
+
+-protocol({rfc, 5802}).
 
 %% External exports
 -export([start_link/0, host_up/1, host_down/1, config_reloaded/0,
@@ -396,20 +398,34 @@ user_exists(_User, <<"">>) ->
 user_exists(User, Server) ->
     case validate_credentials(User, Server) of
 	{ok, LUser, LServer} ->
-	    lists:any(
-	      fun(M) ->
-		      case db_user_exists(LUser, LServer, M) of
-			  {error, _} ->
-			      false;
-			  Else ->
-			      Else
-		      end
-	      end, auth_modules(LServer));
+	    {Exists, PerformExternalUserCheck} =
+	    lists:foldl(
+		fun(M, {Exists0, PerformExternalUserCheck0}) ->
+		    case db_user_exists(LUser, LServer, M) of
+			{{error, _}, Check} ->
+			    {Exists0, PerformExternalUserCheck0 orelse Check};
+			{Else, Check2} ->
+			    {Exists0 orelse Else, PerformExternalUserCheck0 orelse Check2}
+		    end
+		end, {false, false}, auth_modules(LServer)),
+	    case (not Exists) andalso PerformExternalUserCheck andalso
+		 ejabberd_option:auth_external_user_exists_check(Server) andalso
+		 gen_mod:is_loaded(Server, mod_last) of
+		true ->
+		    case mod_last:get_last_info(User, Server) of
+			not_found ->
+			    false;
+			_ ->
+			    true
+		    end;
+		_ ->
+		    Exists
+	    end;
 	_ ->
 	    false
     end.
 
--spec user_exists_in_other_modules(atom(), binary(), binary()) -> boolean() | maybe.
+-spec user_exists_in_other_modules(atom(), binary(), binary()) -> boolean() | maybe_exists.
 user_exists_in_other_modules(Module, User, Server) ->
     user_exists_in_other_modules_loop(
       auth_modules(Server) -- [Module], User, Server).
@@ -418,12 +434,12 @@ user_exists_in_other_modules_loop([], _User, _Server) ->
     false;
 user_exists_in_other_modules_loop([AuthModule | AuthModules], User, Server) ->
     case db_user_exists(User, Server, AuthModule) of
-	true ->
+	{true, _} ->
 	    true;
-	false ->
+	{false, _} ->
 	    user_exists_in_other_modules_loop(AuthModules, User, Server);
-	{error, _} ->
-	    maybe
+	{{error, _}, _} ->
+	    maybe_exists
     end.
 
 -spec which_users_exists(list({binary(), binary()})) -> list({binary(), binary()}).
@@ -626,9 +642,9 @@ db_get_password(User, Server, Mod) ->
 db_user_exists(User, Server, Mod) ->
     case db_get_password(User, Server, Mod) of
 	{ok, _} ->
-	    true;
+	    {true, false};
 	not_found ->
-	    false;
+	    {false, false};
 	error ->
 	    case {Mod:store_type(Server), use_cache(Mod, Server)} of
 		{external, true} ->
@@ -647,18 +663,18 @@ db_user_exists(User, Server, Mod) ->
 			  end,
 		    case Val of
 			{ok, _} ->
-			    true;
+			    {true, Mod /= ejabberd_auth_anonymous} ;
 			not_found ->
-			    false;
+			    {false, Mod /= ejabberd_auth_anonymous};
 			error ->
-			    false;
+			    {false, Mod /= ejabberd_auth_anonymous};
 			{error, _} = Err ->
-			    Err
+			    {Err, Mod /= ejabberd_auth_anonymous}
 		    end;
 		{external, false} ->
-		    ets_cache:untag(Mod:user_exists(User, Server));
+		    {ets_cache:untag(Mod:user_exists(User, Server)), Mod /= ejabberd_auth_anonymous};
 		_ ->
-		    false
+		    {false, false}
 	    end
     end.
 

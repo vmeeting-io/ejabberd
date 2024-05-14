@@ -5,7 +5,7 @@
 %%% Created : 9 Mar 2007 by Igor Goryachev <igor@goryachev.org>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,8 +25,6 @@
 
 -module(mod_vcard_xupdate).
 -behaviour(gen_mod).
-
--protocol({xep, 398, '0.2.0'}).
 
 %% gen_mod callbacks
 -export([start/2, stop/1, reload/3]).
@@ -48,22 +46,13 @@
 
 start(Host, Opts) ->
     init_cache(Host, Opts),
-    ejabberd_hooks:add(c2s_self_presence, Host, ?MODULE,
-		       update_presence, 100),
-    ejabberd_hooks:add(user_send_packet, Host, ?MODULE,
-		       user_send_packet, 50),
-    ejabberd_hooks:add(vcard_iq_set, Host, ?MODULE, vcard_set,
-		       90),
-    ejabberd_hooks:add(remove_user, Host, ?MODULE, remove_user, 50).
+    {ok, [{hook, c2s_self_presence, update_presence, 100},
+          {hook, user_send_packet, user_send_packet, 50},
+          {hook, vcard_iq_set, vcard_set, 90},
+          {hook, remove_user, remove_user, 50}]}.
 
-stop(Host) ->
-    ejabberd_hooks:delete(c2s_self_presence, Host,
-			  ?MODULE, update_presence, 100),
-    ejabberd_hooks:delete(user_send_packet, Host, ?MODULE,
-			  user_send_packet, 50),
-    ejabberd_hooks:delete(vcard_iq_set, Host, ?MODULE,
-			  vcard_set, 90),
-    ejabberd_hooks:delete(remove_user, Host, ?MODULE, remove_user, 50).
+stop(_Host) ->
+    ok.
 
 reload(Host, NewOpts, _OldOpts) ->
     init_cache(Host, NewOpts).
@@ -107,7 +96,7 @@ user_send_packet(Acc) ->
 
 -spec vcard_set(iq()) -> iq().
 vcard_set(#iq{from = #jid{luser = LUser, lserver = LServer}} = IQ) ->
-    ets_cache:delete(?VCARD_XUPDATE_CACHE, {LUser, LServer}),
+    ets_cache:delete(?VCARD_XUPDATE_CACHE, {LUser, LServer}, ejabberd_cluster:get_nodes()),
     ejabberd_sm:force_update_presence({LUser, LServer}),
     IQ;
 vcard_set(Acc) ->
@@ -117,7 +106,7 @@ vcard_set(Acc) ->
 remove_user(User, Server) ->
     LUser = jid:nodeprep(User),
     LServer = jid:nameprep(Server),
-    ets_cache:delete(?VCARD_XUPDATE_CACHE, {LUser, LServer}).
+    ets_cache:delete(?VCARD_XUPDATE_CACHE, {LUser, LServer}, ejabberd_cluster:get_nodes()).
 
 %%====================================================================
 %% Storage
@@ -228,26 +217,26 @@ mod_doc() ->
               "frequently their presence. However, the overhead is significantly "
               "reduced by the use of caching, so you probably don't want "
               "to set 'use_cache' to 'false'."), "",
-           ?T("The module depends on 'mod_vcard'."), "",
+           ?T("The module depends on _`mod_vcard`_."), "",
            ?T("NOTE: Nowadays https://xmpp.org/extensions/xep-0153.html"
               "[XEP-0153] is used mostly as \"read-only\", i.e. modern "
               "clients don't publish their avatars inside vCards. Thus "
               "in the majority of cases the module is only used along "
-              "with 'mod_avatar' module for providing backward compatibility.")],
+              "with _`mod_avatar`_ for providing backward compatibility.")],
       opts =>
           [{use_cache,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'use_cache' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`use_cache`_ option, but applied to this module only.")}},
            {cache_size,
             #{value => "pos_integer() | infinity",
               desc =>
-                  ?T("Same as top-level 'cache_size' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_size`_ option, but applied to this module only.")}},
            {cache_missed,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'cache_missed' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_missed`_ option, but applied to this module only.")}},
            {cache_life_time,
             #{value => "timeout()",
               desc =>
-                  ?T("Same as top-level 'cache_life_time' option, but applied to this module only.")}}]}.
+                  ?T("Same as top-level _`cache_life_time`_ option, but applied to this module only.")}}]}.

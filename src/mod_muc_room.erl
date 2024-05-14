@@ -5,7 +5,7 @@
 %%% Created : 19 Mar 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -26,6 +26,9 @@
 -module(mod_muc_room).
 
 -author('alexey@process-one.net').
+
+-protocol({xep, 317, '0.1', '21.12', "", "conversejs/prosody compatible"}).
+-protocol({xep, 410, '1.1.0', '18.12', "", ""}).
 
 -behaviour(p1_fsm).
 
@@ -49,7 +52,9 @@
 	 get_owners/1,
 	 get_state/1,
 	 set_state/2,
+	 get_info/1,
 	 change_item/5,
+	 change_item_async/5,
 	 config_reloaded/1,
 	 subscribe/4,
 	 unsubscribe/2,
@@ -80,7 +85,12 @@
 -define(MAX_USERS_DEFAULT_LIST,
 	[5, 10, 20, 30, 50, 100, 200, 500, 1000, 2000, 5000]).
 
--define(DEFAULT_MAX_USERS_PRESENCE,1000).
+-define(MUC_HAT_ADD_CMD, <<"http://prosody.im/protocol/hats#add">>).
+-define(MUC_HAT_REMOVE_CMD, <<"http://prosody.im/protocol/hats#remove">>).
+-define(MUC_HAT_LIST_CMD, <<"p1:hats#list">>).
+-define(MAX_HATS_USERS, 100).
+-define(MAX_HATS_PER_USER, 10).
+-define(CLEAN_ROOM_TIMEOUT, 30000).
 
 %-define(DBGFSM, true).
 
@@ -200,6 +210,11 @@ change_item(Pid, JID, Type, AffiliationOrRole, Reason) ->
 	    {error, notfound}
     end.
 
+-spec change_item_async(pid(), jid(), affiliation | role, affiliation() | role(), binary()) -> ok.
+change_item_async(Pid, JID, Type, AffiliationOrRole, Reason) ->
+    p1_fsm:send_all_state_event(
+      Pid, {process_item_change, {JID, Type, AffiliationOrRole, Reason}, undefined}).
+
 -spec get_state(pid()) -> {ok, state()} | {error, notfound | timeout}.
 get_state(Pid) ->
     try p1_fsm:sync_send_all_state_event(Pid, get_state)
@@ -212,6 +227,12 @@ get_state(Pid) ->
 -spec set_state(pid(), state()) -> {ok, state()} | {error, notfound | timeout}.
 set_state(Pid, State) ->
     try p1_fsm:sync_send_all_state_event(Pid, {change_state, State})
+
+-spec get_info(pid()) -> {ok, #{occupants_number => integer()}} |
+                         {error, notfound | timeout}.
+get_info(Pid) ->
+    try
+        {ok, p1_fsm:sync_send_all_state_event(Pid, get_info)}
     catch _:{timeout, {p1_fsm, _, _}} ->
 	    {error, timeout};
 	  _:{_, {p1_fsm, _, _}} ->
@@ -337,15 +358,15 @@ init([Host, ServerHost, Access, Room, HistorySize,
     process_flag(trap_exit, true),
     Shaper = ejabberd_shaper:new(RoomShaper),
     RoomQueue = room_queue_new(ServerHost, Shaper, QueueType),
-    State = set_affiliation(Creator, owner,
-	    #state{host = Host, server_host = ServerHost,
-		   access = Access, room = Room,
-		   history = lqueue_new(HistorySize, QueueType),
-		   jid = jid:make(Room, Host),
-		   just_created = true,
-		   room_queue = RoomQueue,
-		   room_shaper = Shaper}),
-    State0 = set_opts(DefRoomOpts, State),
+    State = set_opts(DefRoomOpts,
+		     #state{host = Host, server_host = ServerHost,
+			    access = Access, room = Room,
+			    history = lqueue_new(HistorySize, QueueType),
+			    jid = jid:make(Room, Host),
+			    just_created = true,
+			    room_queue = RoomQueue,
+			    room_shaper = Shaper}),
+    State0 = set_affiliation(Creator, owner, State),
     State1 = ejabberd_hooks:run_fold(vm_start_room, ServerHost, State0, [ServerHost, Room, Host]),
     store_room(State1),
     ?INFO_MSG("Created MUC room ~ts@~ts by ~ts",
@@ -353,18 +374,21 @@ init([Host, ServerHost, Access, Room, HistorySize,
     add_to_log(room_existence, created, State1),
     add_to_log(room_existence, started, State1),
     ejabberd_hooks:run(start_room, ServerHost, [ServerHost, Room, Host]),
+    erlang:send_after(?CLEAN_ROOM_TIMEOUT, self(),
+                      close_room_if_temporary_and_empty),
     {ok, normal_state, reset_hibernate_timer(State1)};
 init([Host, ServerHost, Access, Room, HistorySize,
 	  RoomShaper, Opts, QueueType]) ->
     process_flag(trap_exit, true),
     Shaper = ejabberd_shaper:new(RoomShaper),
     RoomQueue = room_queue_new(ServerHost, Shaper, QueueType),
+    Jid = jid:make(Room, Host),
     State = set_opts(Opts, #state{host = Host,
 				  server_host = ServerHost,
 				  access = Access,
 				  room = Room,
 				  history = lqueue_new(HistorySize, QueueType),
-				  jid = jid:make(Room, Host),
+				  jid = Jid,
 				  room_queue = RoomQueue,
 				  room_shaper = Shaper}),
     State1 = ejabberd_hooks:run_fold(vm_start_room, ServerHost, State, [ServerHost, Room, Host]),
@@ -372,7 +396,29 @@ init([Host, ServerHost, Access, Room, HistorySize,
     ?INFO_MSG("Started MUC room ~ts@~ts", [Room, Host]),
     add_to_log(room_existence, started, State1),
     ejabberd_hooks:run(start_room, ServerHost, [ServerHost, Room, Host]),
-    {ok, normal_state, reset_hibernate_timer(State1)}.
+    State1 = cleanup_affiliations(State),
+    State2 =
+    case {lists:keyfind(hibernation_time, 1, Opts),
+	  (State1#state.config)#config.mam,
+	  (State1#state.history)#lqueue.max} of
+	{{_, V}, true, L} when is_integer(V), L > 0 ->
+	    {Msgs, _, _} = mod_mam:select(ServerHost, Jid, Jid, [],
+					 #rsm_set{max = L, before = <<"9999999999999999">>},
+					 groupchat, only_messages),
+	    Hist2 =
+	    lists:foldl(
+		fun({_, TS, #forwarded{sub_els = [#message{meta = #{archive_nick := Nick}} = Msg]}}, Hist) ->
+		    Pkt = xmpp:set_from_to(Msg, jid:replace_resource(Jid, Nick), Jid),
+		    Size = element_size(Pkt),
+		    lqueue_in({Nick, Pkt, false, misc:usec_to_now(TS), Size}, Hist)
+		end, State1#state.history, Msgs),
+	    State1#state{history = Hist2};
+	_ ->
+	    State1
+    end,
+    erlang:send_after(?CLEAN_ROOM_TIMEOUT, self(),
+                      close_room_if_temporary_and_empty),
+    {ok, normal_state, reset_hibernate_timer(State2)}.
 
 normal_state({route, <<"">>,
 	      #message{from = From, type = Type, lang = Lang} = Packet},
@@ -497,6 +543,8 @@ normal_state({route, <<"">>,
 	       [StateData]) of
 	    ignore ->
 		{next_state, normal_state, StateData};
+            {ignore, StateData2} ->
+		{next_state, normal_state, StateData2};
 	    #iq{type = T} = IQRes when T == error; T == result ->
 		ejabberd_router:route(IQRes),
 		{next_state, normal_state, StateData};
@@ -525,6 +573,19 @@ normal_state({route, <<"">>,
 			       process_iq_mucsub(From, IQ, StateData);
 			   #xcaptcha{} ->
 			       process_iq_captcha(From, IQ, StateData);
+			   #adhoc_command{} ->
+			       process_iq_adhoc(From, IQ, StateData);
+			   #register{} ->
+                               mod_muc:process_iq_register(IQ);
+			   #fasten_apply_to{} = ApplyTo ->
+			       case xmpp:get_subtag(ApplyTo, #message_moderate{}) of
+				   #message_moderate{} = Moderate ->
+				       process_iq_moderate(From, IQ, ApplyTo, Moderate, StateData);
+				   _ ->
+				       Txt = ?T("The feature requested is not "
+						"supported by the conference"),
+				       {error, xmpp:err_service_unavailable(Txt, Lang)}
+			       end;
 			   _ ->
 			       Txt = ?T("The feature requested is not "
 					"supported by the conference"),
@@ -608,7 +669,7 @@ normal_state({route, ToNick,
 	forget_message ->
 	    {next_state, normal_state, StateData};
 	continue_delivery ->
-	    case {(StateData#state.config)#config.allow_private_messages,
+	    case {is_user_allowed_private_message(From, StateData),
 		  is_user_online(From, StateData) orelse
 		  is_subscriber(From, StateData) orelse
 		  is_user_allowed_message_nonparticipant(From, StateData)} of
@@ -637,15 +698,22 @@ normal_state({route, ToNick,
 					jid:replace_resource(StateData#state.jid,
 							     FromNick),
 				    X = #muc_user{},
-				    PrivMsg = xmpp:set_from(
-						xmpp:set_subtag(Packet, X),
-						FromNickJID),
-				    lists:foreach(
-				      fun(ToJID) ->
-					      ejabberd_router:route(xmpp:set_to(PrivMsg, ToJID))
-				      end, ToJIDs);
+                                    Packet2 = xmpp:set_subtag(Packet, X),
+                                    case ejabberd_hooks:run_fold(muc_filter_message,
+                                                                 StateData#state.server_host,
+								 xmpp:put_meta(Packet2, mam_ignore, true),
+                                                                 [StateData, FromNick]) of
+                                        drop ->
+                                            ok;
+                                        Packet3 ->
+                                            PrivMsg = xmpp:set_from(xmpp:del_meta(Packet3, mam_ignore), FromNickJID),
+                                            lists:foreach(
+                                              fun(ToJID) ->
+                                                      ejabberd_router:route(xmpp:set_to(PrivMsg, ToJID))
+                                              end, ToJIDs)
+                                    end;
 			       true ->
-				    ErrText = ?T("It is not allowed to send private messages"),
+				    ErrText = ?T("You are not allowed to send private messages"),
 				    Err = xmpp:err_forbidden(ErrText, Lang),
 				    ejabberd_router:route_error(Packet, Err)
 			    end
@@ -656,7 +724,7 @@ normal_state({route, ToNick,
 		    Err = xmpp:err_not_acceptable(ErrText, Lang),
 		    ejabberd_router:route_error(Packet, Err);
 		{false, _} ->
-		    ErrText = ?T("It is not allowed to send private messages"),
+		    ErrText = ?T("You are not allowed to send private messages"),
 		    Err = xmpp:err_forbidden(ErrText, Lang),
 		    ejabberd_router:route_error(Packet, Err)
 	    end,
@@ -679,6 +747,10 @@ normal_state({route, ToNick,
 			    ejabberd_router:route_iq(
 			      xmpp:set_from_to(Packet, FromJID, jid:remove_resource(To)),
 			      Packet, self());
+			pubsub ->
+			    ejabberd_router:route_iq(
+				xmpp:set_from_to(Packet, FromJID, jid:remove_resource(To)),
+				Packet, self());
 			ping when ToNick == FromNick ->
 			    %% Self-ping optimization from XEP-0410
 			    ejabberd_router:route(xmpp:make_iq_result(Packet));
@@ -706,7 +778,7 @@ normal_state({route, ToNick,
 normal_state(hibernate, StateData) ->
     case maps:size(StateData#state.users) of
 	0 ->
-	    store_room_no_checks(StateData, []),
+	    store_room_no_checks(StateData, [], true),
 	    ?INFO_MSG("Hibernating room ~ts@~ts", [StateData#state.room, StateData#state.host]),
 	    {stop, normal, StateData#state{hibernate_timer = hibernating}};
 	_ ->
@@ -720,7 +792,7 @@ handle_event({service_message, Msg}, _StateName,
     MessagePkt = #message{type = groupchat, body = xmpp:mk_text(Msg)},
     send_wrapped_multiple(
       StateData#state.jid,
-      get_users_and_subscribers(StateData),
+      get_users_and_subscribers_with_node(?NS_MUCSUB_NODES_MESSAGES, StateData),
       MessagePkt,
       ?NS_MUCSUB_NODES_MESSAGES,
       StateData),
@@ -743,6 +815,16 @@ handle_event({set_affiliations, Affiliations},
 	     StateName, StateData) ->
     NewStateData = set_affiliations(Affiliations, StateData),
     {next_state, StateName, NewStateData};
+handle_event({process_item_change, Item, UJID}, StateName, StateData) ->
+    case process_item_change(Item, StateData, UJID) of
+	{error, _} ->
+            {next_state, StateName, StateData};
+        StateData ->
+            {next_state, StateName, StateData};
+	NSD ->
+	    store_room(NSD),
+            {next_state, StateName, NSD}
+    end;
 handle_event(_Event, StateName, StateData) ->
     {next_state, StateName, StateData}.
 
@@ -773,6 +855,10 @@ handle_sync_event(get_config, _From, StateName,
 handle_sync_event(get_state, _From, StateName,
 		  StateData) ->
     {reply, {ok, StateData}, StateName, StateData};
+handle_sync_event(get_info, _From, StateName,
+		  StateData) ->
+    Result = #{occupants_number => maps:size(StateData#state.users)},
+    {reply, Result, StateName, StateData};
 handle_sync_event({change_config, Config}, _From,
 		  StateName, StateData) ->
     {result, undefined, NSD} = change_config(Config, StateData),
@@ -784,20 +870,24 @@ handle_sync_event({change_state, NewStateData}, _From,
 	true ->
 	    ok;
 	_ ->
-	    erlang:put(muc_subscribers, NewStateData#state.subscribers)
+	    erlang:put(muc_subscribers, NewStateData#state.muc_subscribers#muc_subscribers.subscribers)
     end,
     {reply, {ok, NewStateData}, StateName, NewStateData};
 handle_sync_event({process_item_change, Item, UJID}, _From, StateName, StateData) ->
     case process_item_change(Item, StateData, UJID) of
 	{error, _} = Err ->
 	    {reply, Err, StateName, StateData};
+        StateData ->
+            {reply, {ok, StateData}, StateName, StateData};
 	NSD ->
 	    store_room(NSD),
 	    {reply, {ok, NSD}, StateName, NSD}
     end;
 handle_sync_event(get_subscribers, _From, StateName, StateData) ->
-    JIDs = lists:map(fun jid:make/1,
-		     maps:keys(StateData#state.subscribers)),
+    JIDs = muc_subscribers_fold(
+             fun(_LBareJID, #subscriber{jid = JID}, Acc) ->
+                     [JID | Acc]
+             end, [], StateData#state.muc_subscribers),
     {reply, {ok, JIDs}, StateName, StateData};
 handle_sync_event({muc_subscribe, From, Nick, Nodes}, _From,
 		  StateName, StateData) ->
@@ -807,20 +897,24 @@ handle_sync_event({muc_subscribe, From, Nick, Nodes}, _From,
     Config = StateData#state.config,
     CaptchaRequired = Config#config.captcha_protected,
     PasswordProtected = Config#config.password_protected,
+    MembersOnly = Config#config.members_only,
     TmpConfig = Config#config{captcha_protected = false,
-			       password_protected = false},
+			      password_protected = false,
+			      members_only = false},
     TmpState = StateData#state{config = TmpConfig},
     case process_iq_mucsub(From, IQ, TmpState) of
 	{result, #muc_subscribe{events = NewNodes}, NewState} ->
 	    NewConfig = (NewState#state.config)#config{
 			  captcha_protected = CaptchaRequired,
-			  password_protected = PasswordProtected},
+			  password_protected = PasswordProtected,
+			  members_only = MembersOnly},
 	    {reply, {ok, NewNodes}, StateName,
 	     NewState#state{config = NewConfig}};
 	{ignore, NewState} ->
 	    NewConfig = (NewState#state.config)#config{
 			  captcha_protected = CaptchaRequired,
-			  password_protected = PasswordProtected},
+			  password_protected = PasswordProtected,
+			  members_only = MembersOnly},
 	    {reply, {error, ?T("Request is ignored")},
 	     NewState#state{config = NewConfig}};
 	{error, Err} ->
@@ -841,7 +935,8 @@ handle_sync_event({muc_unsubscribe, From}, _From, StateName,
 	    {reply, {error, get_error_text(Err)}, StateName, StateData}
     end;
 handle_sync_event({is_subscribed, From}, _From, StateName, StateData) ->
-    IsSubs = try maps:get(jid:split(From), StateData#state.subscribers) of
+    IsSubs = try muc_subscribers_get(
+                   jid:split(From), StateData#state.muc_subscribers) of
 		 #subscriber{nick = Nick, nodes = Nodes} -> {true, Nick, Nodes}
 	     catch _:{badkey, _} -> false
 	     end,
@@ -922,6 +1017,8 @@ handle_info({captcha_failed, From}, normal_state,
 		       StateData
 	       end,
     {next_state, normal_state, NewState};
+handle_info(close_room_if_temporary_and_empty, _StateName, StateData) ->
+    close_room_if_temporary_and_empty(StateData);
 handle_info(shutdown, _StateName, StateData) ->
     {stop, shutdown, StateData};
 handle_info({iq_reply, #iq{type = Type, sub_els = Els},
@@ -978,7 +1075,8 @@ terminate(Reason, _StateName,
 		      _ -> ok
 		  end,
 		  tab_remove_online_user(JID, StateData)
-	  end, [], get_users_and_subscribers(StateData)),
+	  end, [], get_users_and_subscribers_with_node(
+                     ?NS_MUCSUB_NODES_PARTICIPANTS, StateData)),
 
 	disable_hibernate_timer(StateData),
 	case StateData#state.hibernate_timer of
@@ -993,11 +1091,9 @@ terminate(Reason, _StateName,
 		    _ ->
 			ok
 		end
-	end,
-	mod_muc:room_destroyed(Host, Room, self(), LServer)
+	end
     catch ?EX_RULE(E, R, St) ->
 	    StackTrace = ?EX_STACK(St),
-	    mod_muc:room_destroyed(Host, Room, self(), LServer),
 	    ?ERROR_MSG("Got exception on room termination:~n** ~ts",
 		       [misc:format_exception(2, E, R, StackTrace)])
     end.
@@ -1019,64 +1115,79 @@ process_groupchat_message(#message{from = From, lang = Lang} = Packet, StateData
 	of
       true ->
 	  {FromNick, Role} = get_participant_data(From, StateData),
-	  if (Role == moderator) or (Role == participant) or
-	     (IsSubscriber andalso ((StateData#state.config)#config.members_by_default == true)) or
-	       ((StateData#state.config)#config.moderated == false) ->
-		 Subject = check_subject(Packet),
-		 {NewStateData1, IsAllowed} = case Subject of
-						[] -> {StateData, true};
-						_ ->
-						    case
-						      can_change_subject(Role,
-									 IsSubscriber,
-									 StateData)
-							of
-						      true ->
-							  NSD =
-							      StateData#state{subject
-										  =
-										  Subject,
-									      subject_author
-										  =
-										  FromNick},
-							  store_room(NSD),
-							  {NSD, true};
-						      _ -> {StateData, false}
-						    end
-					      end,
-		 case IsAllowed of
-		   true ->
-			   SendWrappedMultiple = fun(NP, NS) ->
-			     Node = if Subject == [] -> ?NS_MUCSUB_NODES_MESSAGES;
-				       true -> ?NS_MUCSUB_NODES_SUBJECT
-				    end,
-			     send_wrapped_multiple(
-			       jid:replace_resource(StateData#state.jid, FromNick),
-			       get_users_and_subscribers(StateData),
-			       NP, Node, NS),
-			     NewStateData2 = case has_body_or_subject(NP) of
-					       true -> add_message_to_history(FromNick, From, NP, NS);
-					       false -> NS
-					     end,
-			     {next_state, normal_state, NewStateData2}
-			   end,
-		       case
-			 ejabberd_hooks:run_fold(muc_filter_message,
-						 StateData#state.server_host,
-						 Packet,
-						 [StateData, FromNick])
-			   of
-			 drop ->
-			     {next_state, normal_state, StateData};
-			 {drop, NewState} ->
-				 {next_state, normal_state, NewState};
-			 {pass, NewState} ->
-				 SendWrappedMultiple(Packet, NewState);
- 			 NewPacket ->
-				 SendWrappedMultiple(NewPacket, NewStateData1)
-		       end;
-		   _ ->
-		       Err = case (StateData#state.config)#config.allow_change_subj of
+	  #config{moderated = Moderated} = StateData#state.config,
+	  AllowedByModerationRules =
+	  case {Role == moderator orelse Role == participant orelse
+		not Moderated, IsSubscriber} of
+	      {true, _} -> true;
+	      {_, true} ->
+		  % We assume all subscribers are at least members
+		  true;
+	      _ ->
+		  false
+	  end,
+	  if AllowedByModerationRules ->
+	      Subject = check_subject(Packet),
+	      {NewStateData1, IsAllowed} =
+	      case Subject of
+		  [] ->
+		      {StateData, true};
+		  _ ->
+		      case
+			  can_change_subject(Role,
+					     IsSubscriber,
+					     StateData)
+		      of
+			  true ->
+			      NSD =
+			      StateData#state{subject = Subject,
+					      subject_author = {FromNick, From}},
+			      store_room(NSD),
+			      {NSD, true};
+			  _ -> {StateData, false}
+		      end
+	      end,
+	      case IsAllowed of
+		   	true ->
+		  		SendWrappedMultiple = func(NP, NS) ->
+					NewPacket = xmpp:put_meta(xmpp:remove_subtag(
+						add_stanza_id(NP, StateData), #nick{}),
+						muc_sender_real_jid, From),
+					Node = if Subject == [] -> ?NS_MUCSUB_NODES_MESSAGES;
+						true -> ?NS_MUCSUB_NODES_SUBJECT
+					end,
+					NewStateData2 = check_message_for_retractions(NP, NS),
+					send_wrapped_multiple(
+						jid:replace_resource(StateData#state.jid, FromNick),
+						get_users_and_subscribers_with_node(Node, StateData),
+						NewPacket, Node, NewStateData2),
+					NewStateData3 = case has_body_or_subject(NewPacket) of
+						true ->
+							add_message_to_history(FromNick, From,
+								NewPacket,
+								NewStateData2);
+						false ->
+							NewStateData2
+						end,
+					{next_state, normal_state, NewStateData3}
+					end,
+				case
+					ejabberd_hooks:run_fold(muc_filter_message,
+						StateData#state.server_host,
+						Packet,
+						[StateData, FromNick])
+			   		of
+				drop ->
+					{next_state, normal_state, StateData};
+				{drop, NewState} ->
+					{next_state, normal_state, NewState};
+				{pass, NewState} ->
+					SendWrappedMultiple(Packet, NewState);
+				NewPacket1 ->
+					SendWrappedMultiple(NewPacket1, NewStateData1)
+				end;
+		   	_ ->
+		       	Err = case (StateData#state.config)#config.allow_change_subj of
 			       true ->
 				   xmpp:err_forbidden(
 				     ?T("Only moderators and participants are "
@@ -1103,6 +1214,58 @@ process_groupchat_message(#message{from = From, lang = Lang} = Packet, StateData
 	  Err = xmpp:err_not_acceptable(ErrText, Lang),
 	  ejabberd_router:route_error(Packet, Err),
 	  {next_state, normal_state, StateData}
+    end.
+
+-spec check_message_for_retractions(Packet :: message(), State :: state()) -> state().
+check_message_for_retractions(Packet,
+			  #state{config = Config, room = Room, host = Host,
+                                 server_host = Server} = State) ->
+    case xmpp:get_subtag(Packet, #fasten_apply_to{}) of
+	#fasten_apply_to{id = ID} = F ->
+	    case xmpp:get_subtag(F, #message_retract{}) of
+		#message_retract{} ->
+		    #jid{luser = U, lserver = S} = xmpp:get_from(Packet),
+		    case remove_from_history({U, S}, ID, State) of
+			{NewState, StanzaId} when is_integer(StanzaId) ->
+			    case Config#config.mam of
+				true ->
+				    mod_mam:remove_message_from_archive({Room, Host}, Server, StanzaId),
+				    NewState;
+				_ ->
+				    NewState
+			    end;
+			{NewState, _} ->
+			    NewState
+		    end;
+		_ ->
+		    State
+	    end;
+	_ ->
+	    State
+    end.
+
+-spec add_stanza_id(Packet :: message(), State :: state()) -> message().
+add_stanza_id(Packet, #state{jid = JID}) ->
+    {AddId, NewPacket} =
+    case xmpp:get_meta(Packet, stanza_id, false) of
+	false ->
+	    GenID = erlang:system_time(microsecond),
+	    {true, xmpp:put_meta(Packet, stanza_id, GenID)};
+	_ ->
+	    StanzaIds = xmpp:get_subtags(Packet, #stanza_id{by = #jid{}}),
+	    HasOurStanzaId = lists:any(
+		fun(#stanza_id{by = JID2}) when JID == JID2 -> true;
+		   (_) -> false
+		end, StanzaIds),
+	    {not HasOurStanzaId, Packet}
+    end,
+    if
+	AddId ->
+	    ID = xmpp:get_meta(NewPacket, stanza_id),
+	    IDs = integer_to_binary(ID),
+	    xmpp:append_subtags(NewPacket, [#stanza_id{by = JID, id = IDs}]);
+	true ->
+	    Packet
     end.
 
 -spec process_normal_message(jid(), message(), state()) -> state().
@@ -1229,12 +1392,13 @@ process_voice_approval(From, Pkt, VoiceApproval, StateData) ->
 	    StateData
     end.
 
--spec direct_iq_type(iq()) -> vcard | ping | request | response | stanza_error().
+-spec direct_iq_type(iq()) -> vcard | ping | request | response | pubsub | stanza_error().
 direct_iq_type(#iq{type = T, sub_els = SubEls, lang = Lang}) when T == get; T == set ->
     case SubEls of
 	[El] ->
 	    case xmpp:get_ns(El) of
 		?NS_VCARD when T == get -> vcard;
+		?NS_PUBSUB when T == get -> pubsub;
 		?NS_PING when T == get -> ping;
 		_ -> request
 	    end;
@@ -1261,6 +1425,24 @@ is_user_allowed_message_nonparticipant(JID,
       _ -> false
     end.
 
+-spec is_user_allowed_private_message(jid(), state()) -> boolean().
+is_user_allowed_private_message(JID, StateData) ->
+    case {(StateData#state.config)#config.allowpm,
+            get_role(JID, StateData)} of
+        {anyone, _} ->
+            true;
+        {participants, moderator} ->
+            true;
+        {participants, participant} ->
+            true;
+        {moderators, moderator} ->
+            true;
+        {none, _} ->
+            false;
+        {_, _} ->
+            false
+    end.
+
 %% @doc Get information of this participant, or default values.
 %% If the JID is not a participant, return values for a service message.
 -spec get_participant_data(jid(), state()) -> {binary(), role()}.
@@ -1269,8 +1451,8 @@ get_participant_data(From, StateData) ->
 	#user{nick = FromNick, role = Role} ->
 	    {FromNick, Role}
     catch _:{badkey, _} ->
-	    try maps:get(jid:tolower(jid:remove_resource(From)),
-			 StateData#state.subscribers) of
+	    try muc_subscribers_get(jid:tolower(jid:remove_resource(From)),
+                                    StateData#state.muc_subscribers) of
 		#subscriber{nick = FromNick} ->
 		    {FromNick, none}
 	    catch _:{badkey, _} ->
@@ -1308,7 +1490,7 @@ do_process_presence(Nick, #presence{from = From, type = available, lang = Lang} 
 		true ->
 		    case {nick_collision(From, Nick, StateData),
 			  mod_muc:can_use_nick(StateData#state.server_host,
-					       StateData#state.host,
+					       jid:encode(StateData#state.jid),
 					       From, Nick),
 			  {(StateData#state.config)#config.allow_visitor_nickchange,
 			   is_visitor(From, StateData)}} of
@@ -1401,7 +1583,7 @@ maybe_strip_status_from_presence(From, Packet, StateData) ->
 close_room_if_temporary_and_empty(StateData1) ->
     case not (StateData1#state.config)#config.persistent
 	andalso maps:size(StateData1#state.users) == 0
-	andalso maps:size(StateData1#state.subscribers) == 0 of
+	andalso muc_subscribers_size(StateData1#state.muc_subscribers) == 0 of
       true ->
 	  ?INFO_MSG("Destroyed MUC room ~ts because it's temporary "
 		    "and empty",
@@ -1414,6 +1596,17 @@ close_room_if_temporary_and_empty(StateData1) ->
 
 -spec get_users_and_subscribers(state()) -> users().
 get_users_and_subscribers(StateData) ->
+    get_users_and_subscribers_aux(
+      StateData#state.muc_subscribers#muc_subscribers.subscribers,
+      StateData).
+
+-spec get_users_and_subscribers_with_node(binary(), state()) -> users().
+get_users_and_subscribers_with_node(Node, StateData) ->
+    get_users_and_subscribers_aux(
+      muc_subscribers_get_by_node(Node, StateData#state.muc_subscribers),
+      StateData).
+
+get_users_and_subscribers_aux(Subscribers, StateData) ->
     OnlineSubscribers = maps:fold(
 			   fun(LJID, _, Acc) ->
 				   LBareJID = jid:remove_resource(LJID),
@@ -1437,7 +1630,7 @@ get_users_and_subscribers(StateData) ->
 		   true ->
 		       Acc
 	       end
-       end, StateData#state.users, StateData#state.subscribers).
+       end, StateData#state.users, Subscribers).
 
 -spec is_user_online(jid(), state()) -> boolean().
 is_user_online(JID, StateData) ->
@@ -1447,7 +1640,7 @@ is_user_online(JID, StateData) ->
 -spec is_subscriber(jid(), state()) -> boolean().
 is_subscriber(JID, StateData) ->
     LJID = jid:tolower(jid:remove_resource(JID)),
-    maps:is_key(LJID, StateData#state.subscribers).
+    muc_subscribers_is_key(LJID, StateData#state.muc_subscribers).
 
 %% Check if the user is occupant of the room, or at least is an admin or owner.
 -spec is_occupant_or_admin(jid(), state()) -> boolean().
@@ -1461,6 +1654,12 @@ is_occupant_or_admin(JID, StateData) ->
       true -> true;
       _ -> false
     end.
+
+%% Check if the user is an admin or owner.
+-spec is_admin(jid(), state()) -> boolean().
+is_admin(JID, StateData) ->
+    FAffiliation = get_affiliation(JID, StateData),
+    FAffiliation == admin orelse FAffiliation == owner.
 
 %% Decide the fate of the message and its sender
 %% Returns: continue_delivery | forget_message | {expulse_sender, Reason}
@@ -1621,13 +1820,23 @@ set_affiliations_fallback(Affiliations, StateData) ->
 -spec get_affiliation(ljid() | jid(), state()) -> affiliation().
 get_affiliation(#jid{} = JID, StateData) ->
     case get_service_affiliation(JID, StateData) of
-        owner ->
-            owner;
-        none ->
-            case do_get_affiliation(JID, StateData) of
-                {Affiliation, _Reason} -> Affiliation;
-                Affiliation -> Affiliation
-            end
+	owner ->
+	    owner;
+	none ->
+	    Aff = case do_get_affiliation(JID, StateData) of
+		      {Affiliation, _Reason} -> Affiliation;
+		      Affiliation -> Affiliation
+		  end,
+	    case {Aff, (StateData#state.config)#config.members_only} of
+		% Subscribers should be have members affiliation in this case
+		{none, true} ->
+		    case is_subscriber(JID, StateData) of
+			true -> member;
+			_ -> none
+		    end;
+		_ ->
+		    Aff
+	    end
     end;
 get_affiliation(LJID, StateData) ->
     get_affiliation(jid:make(LJID), StateData).
@@ -1688,7 +1897,7 @@ do_get_affiliation_fallback(JID, StateData) ->
 
 -spec get_affiliations(state()) -> affiliations().
 get_affiliations(#state{config = #config{persistent = false}} = StateData) ->
-    get_affiliations_callback(StateData);
+    get_affiliations_fallback(StateData);
 get_affiliations(StateData) ->
     Room = StateData#state.room,
     Host = StateData#state.host,
@@ -1696,13 +1905,13 @@ get_affiliations(StateData) ->
     Mod = gen_mod:db_mod(ServerHost, mod_muc),
     case Mod:get_affiliations(ServerHost, Room, Host) of
 	{error, _} ->
-	    get_affiliations_callback(StateData);
+	    get_affiliations_fallback(StateData);
 	{ok, Affiliations} ->
 	    Affiliations
     end.
 
--spec get_affiliations_callback(state()) -> affiliations().
-get_affiliations_callback(StateData) ->
+-spec get_affiliations_fallback(state()) -> affiliations().
+get_affiliations_fallback(StateData) ->
     StateData#state.affiliations.
 
 -spec get_service_affiliation(jid(), state()) -> owner | none.
@@ -1760,7 +1969,19 @@ set_role(JID, Role, StateData) ->
 		   end, StateData#state.users, LJIDs),
 		 StateData#state.nicks}
 	end,
-    StateData#state{users = Users, nicks = Nicks}.
+    Affiliation = get_affiliation(JID, StateData),
+    Roles = case Role of
+                %% Don't persist 'none' role: if someone is kicked, they will
+                %% maintain the same role they had *before* they were kicked,
+                %% unless they were banned
+                none when Affiliation /= outcast ->
+		    maps:remove(jid:remove_resource(LJID), StateData#state.roles);
+                NewRole ->
+                    maps:put(jid:remove_resource(LJID),
+                             NewRole,
+                             StateData#state.roles)
+    end,
+    StateData#state{users = Users, nicks = Nicks, roles = Roles}.
 
 -spec get_role(jid(), state()) -> role().
 get_role(JID, StateData) ->
@@ -1974,19 +2195,33 @@ set_subscriber(JID, Nick, Nodes,
 	       #state{room = Room, host = Host, server_host = ServerHost} = StateData) ->
     BareJID = jid:remove_resource(JID),
     LBareJID = jid:tolower(BareJID),
-    Subscribers = maps:put(LBareJID,
-			   #subscriber{jid = BareJID,
-				       nick = Nick,
-				       nodes = Nodes},
-			   StateData#state.subscribers),
-    Nicks = maps:put(Nick, [LBareJID], StateData#state.subscriber_nicks),
-    NewStateData = StateData#state{subscribers = Subscribers,
-				   subscriber_nicks = Nicks},
+    MUCSubscribers =
+        muc_subscribers_put(
+          #subscriber{jid = BareJID,
+                      nick = Nick,
+                      nodes = Nodes},
+          StateData#state.muc_subscribers),
+    NewStateData = StateData#state{muc_subscribers = MUCSubscribers},
     store_room(NewStateData, [{add_subscription, BareJID, Nick, Nodes}]),
-    case not maps:is_key(LBareJID, StateData#state.subscribers) of
+    case not muc_subscribers_is_key(LBareJID, StateData#state.muc_subscribers) of
 	true ->
-	    send_subscriptions_change_notifications(BareJID, Nick, subscribe, NewStateData),
-	    ejabberd_hooks:run(muc_subscribed, ServerHost, [ServerHost, Room, Host, BareJID]);
+	    Packet1a = #message{
+		sub_els = [#ps_event{
+		    items = #ps_items{
+			node = ?NS_MUCSUB_NODES_SUBSCRIBERS,
+			items = [#ps_item{
+			    id = p1_rand:get_string(),
+			    sub_els = [#muc_subscribe{jid = BareJID, nick = Nick}]}]}}]},
+	    Packet1b = #message{
+		sub_els = [#ps_event{
+		    items = #ps_items{
+			node = ?NS_MUCSUB_NODES_SUBSCRIBERS,
+			items = [#ps_item{
+			    id = p1_rand:get_string(),
+			    sub_els = [#muc_subscribe{nick = Nick}]}]}}]},
+	    {Packet2a, Packet2b} = ejabberd_hooks:run_fold(muc_subscribed, ServerHost, {Packet1a, Packet1b},
+							   [ServerHost, Room, Host, BareJID, StateData]),
+	    send_subscriptions_change_notifications(Packet2a, Packet2b, NewStateData);
 	_ ->
 	    ok
     end,
@@ -2030,7 +2265,7 @@ filter_presence(Presence) ->
 		    XMLNS = xmpp:get_ns(El),
 		    case catch binary:part(XMLNS, 0, size(?NS_MUC)) of
 			?NS_MUC -> false;
-			_ -> true
+			_ -> XMLNS /= ?NS_HATS
 		    end
 	    end, xmpp:get_els(Presence)),
     xmpp:set_els(Presence, Els).
@@ -2065,7 +2300,8 @@ add_user_presence_un(JID, Presence, StateData) ->
 -spec find_jids_by_nick(binary(), state()) -> [jid()].
 find_jids_by_nick(Nick, StateData) ->
     Users = case maps:get(Nick, StateData#state.nicks, []) of
-		[] -> maps:get(Nick, StateData#state.subscriber_nicks, []);
+                [] -> muc_subscribers_get_by_nick(
+                        Nick, StateData#state.muc_subscribers);
 		Us -> Us
 	    end,
     [jid:make(LJID) || LJID <- Users].
@@ -2109,11 +2345,22 @@ get_priority_from_presence(#presence{priority = Prio}) ->
         _ -> Prio
     end.
 
--spec find_nick_by_jid(jid(), state()) -> binary().
+-spec find_nick_by_jid(jid() | undefined, state()) -> binary().
+find_nick_by_jid(undefined, _StateData) ->
+    <<>>;
 find_nick_by_jid(JID, StateData) ->
     LJID = jid:tolower(JID),
-    #user{nick = Nick} = maps:get(LJID, StateData#state.users),
-    Nick.
+    case maps:find(LJID, StateData#state.users) of
+	{ok, #user{nick = Nick}} ->
+	    Nick;
+	_ ->
+	    case maps:find(LJID, (StateData#state.muc_subscribers)#muc_subscribers.subscribers) of
+		{ok, #subscriber{nick = Nick}} ->
+		    Nick;
+		_ ->
+		    <<>>
+	    end
+    end.
 
 -spec is_nick_change(jid(), binary(), state()) -> boolean().
 is_nick_change(JID, Nick, StateData) ->
@@ -2129,10 +2376,10 @@ is_nick_change(JID, Nick, StateData) ->
 nick_collision(User, Nick, StateData) ->
     UserOfNick = case find_jid_by_nick(Nick, StateData) of
 		     false ->
-			 try maps:get(Nick, StateData#state.subscriber_nicks) of
-			     [J] -> J
-			 catch _:{badkey, _} -> false
-			 end;
+                         case muc_subscribers_get_by_nick(Nick, StateData#state.muc_subscribers) of
+                             [J] -> J;
+                             [] -> false
+                         end;
 		     J -> J
 		 end,
     (UserOfNick /= false andalso
@@ -2172,16 +2419,16 @@ add_new_user(From, Nick, Packet, State) ->
     IsSubscribeRequest = not is_record(Packet, presence),
 	IsWhilelistUser = lists:member(From#jid.luser, ?WHITE_LIST_USERS) == true,
 	?INFO_MSG("add_new_user: ~ts ~ts ~p ~p ~p ~p ~p ~p ~p ~p", [ServerHost, jid:encode(From), ServiceAffiliation, Affiliation, NUsers, MaxUsers, MaxAdminUsers, IsWhilelistUser, NConferences, MaxConferences]),
-    case {(ServiceAffiliation == owner orelse
-	     ((Affiliation == admin orelse Affiliation == owner)
-	       andalso NUsers < MaxAdminUsers)
-	       orelse NUsers < MaxUsers
-		   orelse IsWhilelistUser)
-	    andalso NConferences < MaxConferences,
-	  Collision,
-	  mod_muc:can_use_nick(StateData#state.server_host,
-			       StateData#state.host, From, Nick),
-	  get_default_role(Affiliation, StateData)}
+    case {ServiceAffiliation == owner
+			orelse ((((Affiliation == admin orelse Affiliation == owner)
+			andalso NUsers < MaxAdminUsers)
+			orelse NUsers < MaxUsers
+			orelse IsWhilelistUser)
+	    	andalso NConferences < MaxConferences),
+	  	Collision,
+	  	mod_muc:can_use_nick(StateData#state.server_host,
+			jid:encode(StateData#state.jid), From, Nick),
+	  	get_occupant_initial_role(From, Affiliation, StateData)}
 	of
       {false, _, _, _} when NUsers >= MaxUsers orelse NUsers >= MaxAdminUsers ->
 	  ?DEBUG("case1:", []),
@@ -2581,6 +2828,11 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
 				{none, #presence{type = unavailable}}
         end,
     Affiliation = get_affiliation(LJID, StateData),
+    Node1 = case is_ra_changed(NJID, IsInitialPresence, StateData, OldStateData) of
+                true -> ?NS_MUCSUB_NODES_AFFILIATIONS;
+                false -> ?NS_MUCSUB_NODES_PRESENCE
+            end,
+    Node2 = ?NS_MUCSUB_NODES_PARTICIPANTS,
     UserMap =
         case is_room_overcrowded(StateData) orelse
 	     (not (presence_broadcast_allowed(NJID, StateData) orelse
@@ -2588,7 +2840,10 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
             true ->
                 #{LNJID => UserInfo};
             false ->
-                get_users_and_subscribers(StateData)
+                %% TODO: optimize further
+                UM1 = get_users_and_subscribers_with_node(Node1, StateData),
+                UM2 = get_users_and_subscribers_with_node(Node2, StateData),
+                maps:merge(UM1, UM2)
         end,
     maps:fold(
       fun(LUJID, Info, _) ->
@@ -2610,13 +2865,10 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
 	      Pres = if Presence == undefined -> #presence{};
 			true -> Presence
 		     end,
-	      Packet = xmpp:set_subtag(
-			 Pres, #muc_user{items = [Item],
-					 status_codes = StatusCodes}),
-	      Node1 = case is_ra_changed(NJID, IsInitialPresence, StateData, OldStateData) of
-			  true -> ?NS_MUCSUB_NODES_AFFILIATIONS;
-			  false -> ?NS_MUCSUB_NODES_PRESENCE
-		      end,
+              Packet = xmpp:set_subtag(
+                         add_presence_hats(NJID, Pres, StateData),
+                         #muc_user{items = [Item],
+                                   status_codes = StatusCodes}),
 	      send_wrapped(jid:replace_resource(StateData#state.jid, Nick),
 			   Info#user.jid, Packet, Node1, StateData),
 	      Type = xmpp:get_type(Packet),
@@ -2624,7 +2876,6 @@ send_new_presence(NJID, Reason, IsInitialPresence, StateData, OldStateData) ->
 	      IsOccupant = Info#user.last_presence /= undefined,
 	      if (IsSubscriber and not IsOccupant) and
 		 (IsInitialPresence or (Type == unavailable)) ->
-		      Node2 = ?NS_MUCSUB_NODES_PARTICIPANTS,
 		      send_wrapped(jid:replace_resource(StateData#state.jid, Nick),
 				   Info#user.jid, Packet, Node2, StateData);
 		 true ->
@@ -2666,7 +2917,9 @@ send_existing_presences1(ToJID, StateData) ->
 				 false -> Item0
 			     end,
 		      Packet = xmpp:set_subtag(
-				 Presence, #muc_user{items = [Item]}),
+                                 add_presence_hats(
+                                   FromJID, Presence, StateData),
+                                 #muc_user{items = [Item]}),
 		      send_wrapped(jid:replace_resource(StateData#state.jid, FromNick),
 				   RealToJID, Packet, ?NS_MUCSUB_NODES_PRESENCE, StateData)
 	      end
@@ -2755,11 +3008,13 @@ send_nick_changing(JID, OldNick, StateData,
 	      end;
 	 (_, _, _) ->
 	      ok
-      end, ok, get_users_and_subscribers(StateData)).
+      end, ok, get_users_and_subscribers_with_node(
+                 ?NS_MUCSUB_NODES_PRESENCE, StateData)).
 
 -spec maybe_send_affiliation(jid(), affiliation(), state()) -> ok.
 maybe_send_affiliation(JID, Affiliation, StateData) ->
     LJID = jid:tolower(JID),
+    %% TODO: there should be a better way to check IsOccupant
     Users = get_users_and_subscribers(StateData),
     IsOccupant = case LJID of
 		     {LUser, LServer, <<"">>} ->
@@ -2785,7 +3040,8 @@ send_affiliation(JID, Affiliation, StateData) ->
 		     role = none},
     Message = #message{id = p1_rand:get_string(),
 		       sub_els = [#muc_user{items = [Item]}]},
-    Users = get_users_and_subscribers(StateData),
+    Users = get_users_and_subscribers_with_node(
+              ?NS_MUCSUB_NODES_AFFILIATIONS, StateData),
     Recipients = case (StateData#state.config)#config.anonymous of
 		   true ->
 		       maps:filter(fun(_, #user{role = moderator}) ->
@@ -2873,6 +3129,37 @@ add_message_to_history(FromNick, FromJID, Packet, StateData) ->
 	    StateData#state{just_created = erlang:system_time(microsecond)}
     end.
 
+remove_from_history(StanzaId, #state{history = #lqueue{queue = Queue} = LQueue} = StateData) ->
+    NewQ = p1_queue:foldl(
+	fun({_, Pkt, _, _, _} = Entry, Acc) ->
+	    case xmpp:get_meta(Pkt, stanza_id, missing) of
+		V when V == StanzaId ->
+		    Acc;
+		_ ->
+		    p1_queue:in(Entry, Acc)
+	    end
+	end, p1_queue:new(), Queue),
+    StateData#state{history = LQueue#lqueue{queue = NewQ}}.
+
+remove_from_history({U1, S1}, OriginId, #state{history = #lqueue{queue = Queue} = LQueue} = StateData) ->
+    {NewQ, StanzaId} = p1_queue:foldl(
+	fun({_, Pkt, _, _, _} = Entry, {Q, none}) ->
+	    case jid:tolower(xmpp:get_from(Pkt)) of
+		{U2, S2, _} when U1 == U2, S1 == S2 ->
+		    case xmpp:get_subtag(Pkt, #origin_id{}) of
+			#origin_id{id = V} when V == OriginId ->
+			    {Q, xmpp:get_meta(Pkt, stanza_id, missing)};
+			_ ->
+			    {p1_queue:in(Entry, Q), none}
+		    end;
+		_ ->
+		    {p1_queue:in(Entry, Q), none}
+	    end;
+	   (Entry, {Q, S}) ->
+	       {p1_queue:in(Entry, Q), S}
+	end, {p1_queue:new(), none}, Queue),
+    {StateData#state{history = LQueue#lqueue{queue = NewQ}}, StanzaId}.
+
 -spec send_history(jid(), [lqueue_elem()], state()) -> ok.
 send_history(JID, History, StateData) ->
     lists:foreach(
@@ -2885,14 +3172,24 @@ send_history(JID, History, StateData) ->
       end, History).
 
 -spec send_subject(jid(), state()) -> ok.
-send_subject(JID, #state{subject_author = Nick} = StateData) ->
+send_subject(JID, #state{subject_author = {Nick, AuthorJID}} = StateData) ->
     Subject = case StateData#state.subject of
 		  [] -> [#text{}];
 		  [_|_] = S -> S
 	      end,
-    Packet = #message{from = jid:replace_resource(StateData#state.jid, Nick),
+    Packet = #message{from = AuthorJID,
 		      to = JID, type = groupchat, subject = Subject},
-    ejabberd_router:route(Packet).
+    case ejabberd_hooks:run_fold(muc_filter_message,
+                                 StateData#state.server_host,
+                                 xmpp:put_meta(Packet, mam_ignore, true),
+                                 [StateData, Nick]) of
+        drop ->
+            ok;
+        NewPacket1 ->
+            FromRoomNick = jid:replace_resource(StateData#state.jid, Nick),
+            NewPacket2 = xmpp:set_from(NewPacket1, FromRoomNick),
+            ejabberd_router:route(NewPacket2)
+    end.
 
 -spec check_subject(message()) -> [text()].
 check_subject(#message{subject = [_|_] = Subj, body = [],
@@ -3069,26 +3366,34 @@ process_item_change(Item, SD, UJID) ->
 			send_kickban_presence(UJID, JID, Reason, 307, SD),
 			set_role(JID, none, SD);
 	    {JID, affiliation, none, Reason} ->
-			case (SD#state.config)#config.members_only of
-				true ->
-				send_kickban_presence(UJID, JID, Reason, 321, none, SD),
-				maybe_send_affiliation(JID, none, SD),
-				SD1 = set_affiliation(JID, none, SD),
-				set_role(JID, none, SD1);
-				_ ->
-				SD1 = set_affiliation(JID, none, SD),
-				SD2 = case (SD1#state.config)#config.moderated of
-					true -> set_role(JID, visitor, SD1);
-					false -> set_role(JID, participant, SD1)
-				end,
-				send_update_presence(JID, Reason, SD2, SD),
-				maybe_send_affiliation(JID, none, SD2),
-				SD2
-			end;
+                case get_affiliation(JID, SD) of
+                    none -> SD;
+                    _ ->
+                        case (SD#state.config)#config.members_only of
+                            true ->
+                                send_kickban_presence(UJID, JID, Reason, 321, none, SD),
+                                maybe_send_affiliation(JID, none, SD),
+                                SD1 = set_affiliation(JID, none, SD),
+                                set_role(JID, none, SD1);
+                            _ ->
+                                SD1 = set_affiliation(JID, none, SD),
+                                SD2 = case (SD1#state.config)#config.moderated of
+                                          true -> set_role(JID, visitor, SD1);
+                                          false -> set_role(JID, participant, SD1)
+                                      end,
+                                send_update_presence(JID, Reason, SD2, SD),
+                                maybe_send_affiliation(JID, none, SD2),
+                                SD2
+                        end
+                end;
 	    {JID, affiliation, outcast, Reason} ->
-			send_kickban_presence(UJID, JID, Reason, 301, outcast, SD),
-			maybe_send_affiliation(JID, outcast, SD),
-			set_affiliation(JID, outcast, set_role(JID, none, SD), Reason);
+		send_kickban_presence(UJID, JID, Reason, 301, outcast, SD),
+		maybe_send_affiliation(JID, outcast, SD),
+                {result, undefined, SD2} =
+                    process_iq_mucsub(JID,
+                                      #iq{type = set,
+                                          sub_els = [#muc_unsubscribe{}]}, SD),
+		set_role(JID, none, set_affiliation(JID, outcast, SD2, Reason));
 	    {JID, affiliation, A, Reason} when (A == admin) or (A == owner) ->
 			SD1 = set_affiliation(JID, A, SD, Reason),
 			SD2 = set_role(JID, moderator, SD1),
@@ -3424,7 +3729,14 @@ send_kickban_presence(UJID, JID, Reason, Code, NewAffiliation,
 send_kickban_presence1(MJID, UJID, Reason, Code, Affiliation,
 		       StateData) ->
     #user{jid = RealJID, nick = Nick} = maps:get(jid:tolower(UJID), StateData#state.users),
-    ActorNick = get_actor_nick(MJID, StateData),
+    ActorNick = find_nick_by_jid(MJID, StateData),
+    %% TODO: optimize further
+    UserMap =
+        maps:merge(
+          get_users_and_subscribers_with_node(
+            ?NS_MUCSUB_NODES_AFFILIATIONS, StateData),
+          get_users_and_subscribers_with_node(
+            ?NS_MUCSUB_NODES_PARTICIPANTS, StateData)),
     maps:fold(
       fun(LJID, Info, _) ->
 	      IsSelfPresence = jid:tolower(UJID) == LJID,
@@ -3458,16 +3770,7 @@ send_kickban_presence1(MJID, UJID, Reason, Code, Affiliation,
 		 true ->
 		      ok
 	      end
-      end, ok, get_users_and_subscribers(StateData)).
-
--spec get_actor_nick(undefined | jid(), state()) -> binary().
-get_actor_nick(undefined, _StateData) ->
-    <<"">>;
-get_actor_nick(MJID, StateData) ->
-    try maps:get(jid:tolower(MJID), StateData#state.users) of
-	#user{nick = ActorNick} -> ActorNick
-    catch _:{badkey, _} -> <<"">>
-    end.
+      end, ok, UserMap).
 
 -spec convert_legacy_fields([xdata_field()]) -> [xdata_field()].
 convert_legacy_fields(Fs) ->
@@ -3700,7 +4003,7 @@ get_config(Lang, StateData, From) ->
 	 {moderatedroom, Config#config.moderated},
 	 {members_by_default, Config#config.members_by_default},
 	 {changesubject, Config#config.allow_change_subj},
-	 {allow_private_messages, Config#config.allow_private_messages},
+	 {allowpm, Config#config.allowpm},
 	 {allow_private_messages_from_visitors,
 	  Config#config.allow_private_messages_from_visitors},
 	 {allow_query_users, Config#config.allow_query_users},
@@ -3710,7 +4013,8 @@ get_config(Lang, StateData, From) ->
 	 {allow_voice_requests, Config#config.allow_voice_requests},
 	 {allow_subscription, Config#config.allow_subscription},
 	 {voice_request_min_interval, Config#config.voice_request_min_interval},
-	 {pubsub, Config#config.pubsub}]
+	 {pubsub, Config#config.pubsub},
+	 {enable_hats, Config#config.enable_hats}]
 	++
 	case ejabberd_captcha:is_feature_available() of
 	    true ->
@@ -3770,8 +4074,8 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({roomdesc, Desc}, C) -> C#config{description = Desc};
 	 ({changesubject, V}, C) -> C#config{allow_change_subj = V};
 	 ({allow_query_users, V}, C) -> C#config{allow_query_users = V};
-	 ({allow_private_messages, V}, C) ->
-	      C#config{allow_private_messages = V};
+	 ({allowpm, V}, C) ->
+	      C#config{allowpm = V};
 	 ({allow_private_messages_from_visitors, V}, C) ->
 	      C#config{allow_private_messages_from_visitors = V};
 	 ({allow_visitor_status, V}, C) -> C#config{allow_visitor_status = V};
@@ -3800,6 +4104,7 @@ set_config(Opts, Config, ServerHost, Lang) ->
 	 ({maxusers, V}, C) -> C#config{max_users = V};
 	 ({enablelogging, V}, C) -> C#config{logging = V};
 	 ({pubsub, V}, C) -> C#config{pubsub = V};
+	 ({enable_hats, V}, C) -> C#config{enable_hats = V};
 	 ({lang, L}, C) -> C#config{lang = L};
 	 ({captcha_whitelist, Js}, C) ->
 	      LJIDs = [jid:tolower(J) || J <- Js],
@@ -3881,7 +4186,8 @@ send_config_change_info(New, #state{config = Old} = StateData) ->
 			       id = p1_rand:get_string(),
 			       sub_els = [#muc_user{status_codes = Codes}]},
 	    send_wrapped_multiple(StateData#state.jid,
-				  get_users_and_subscribers(StateData),
+				  get_users_and_subscribers_with_node(
+                                    ?NS_MUCSUB_NODES_CONFIG, StateData),
 				  Message,
 				  ?NS_MUCSUB_NODES_CONFIG,
 				  StateData);
@@ -3903,9 +4209,23 @@ remove_nonmembers(StateData) ->
       end, StateData, get_users_and_subscribers(StateData)).
 
 -spec set_opts([{atom(), any()}], state()) -> state().
-set_opts([], StateData) ->
+set_opts(Opts, StateData) ->
+    case lists:keytake(persistent, 1, Opts) of
+	false ->
+	    set_opts2(Opts, StateData);
+	{value, Tuple, Rest} ->
+	    set_opts2([Tuple | Rest], StateData)
+    end.
+
+-spec set_opts2([{atom(), any()}], state()) -> state().
+set_opts2([], StateData) ->
     set_vcard_xupdate(StateData);
-set_opts([{Opt, Val} | Opts], StateData) ->
+set_opts2([{vcard, Val} | Opts], StateData)
+  when is_record(Val, vcard_temp) ->
+    %% default_room_options is setting a default room vcard
+    ValRaw = fxml:element_to_binary(xmpp:encode(Val)),
+    set_opts2([{vcard, ValRaw} | Opts], StateData);
+set_opts2([{Opt, Val} | Opts], StateData) ->
     NSD = case Opt of
 	    title ->
 		StateData#state{config =
@@ -3923,9 +4243,9 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 		StateData#state{config =
 				    (StateData#state.config)#config{allow_query_users
 									= Val}};
-	    allow_private_messages ->
+	    allowpm ->
 		StateData#state{config =
-				    (StateData#state.config)#config{allow_private_messages
+				    (StateData#state.config)#config{allowpm
 									= Val}};
 	    allow_private_messages_from_visitors ->
 		StateData#state{config =
@@ -4029,43 +4349,55 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 	    allow_subscription ->
 		StateData#state{config =
 				    (StateData#state.config)#config{allow_subscription = Val}};
+            enable_hats ->
+                StateData#state{config =
+                                    (StateData#state.config)#config{enable_hats = Val}};
 	    lang ->
 		StateData#state{config =
 				    (StateData#state.config)#config{lang = Val}};
 	    subscribers ->
-		  {Subscribers, Nicks} =
-		      lists:foldl(
-			fun({JID, Nick, Nodes}, {SubAcc, NickAcc}) ->
-			    BareJID = case JID of
-					  #jid{} -> jid:remove_resource(JID);
-					  _ ->
-					      ?ERROR_MSG("Invalid subscriber JID in set_opts ~p", [JID]),
-					      jid:remove_resource(jid:make(JID))
-				      end,
-			    LBareJID = jid:tolower(BareJID),
-			    {maps:put(
-				LBareJID,
-				#subscriber{jid = BareJID,
-					    nick = Nick,
-					    nodes = Nodes},
-				SubAcc),
-			     maps:put(Nick, [LBareJID], NickAcc)}
-			end, {#{}, #{}}, Val),
-		  StateData#state{subscribers = Subscribers,
-				  subscriber_nicks = Nicks};
+                  MUCSubscribers =
+                      lists:foldl(
+                        fun({JID, Nick, Nodes}, MUCSubs) ->
+                                BareJID =
+                                    case JID of
+                                        #jid{} -> jid:remove_resource(JID);
+                                        _ ->
+                                            ?ERROR_MSG("Invalid subscriber JID in set_opts ~p", [JID]),
+                                            jid:remove_resource(jid:make(JID))
+                                    end,
+                                muc_subscribers_put(
+                                  #subscriber{jid = BareJID,
+                                              nick = Nick,
+                                              nodes = Nodes},
+                                  MUCSubs)
+                        end, muc_subscribers_new(), Val),
+                  StateData#state{muc_subscribers = MUCSubscribers};
 	    affiliations ->
-		StateData#state{affiliations = maps:from_list(Val)};
+		set_affiliations(maps:from_list(Val), StateData);
+	    roles ->
+		StateData#state{roles = maps:from_list(Val)};
 	    subject ->
 		  Subj = if Val == <<"">> -> [];
 			    is_binary(Val) -> [#text{data = Val}];
 			    is_list(Val) -> Val
 			 end,
 		  StateData#state{subject = Subj};
-	    subject_author -> StateData#state{subject_author = Val};
-	    room_id -> StateData#state{room_id = Val};
-	    _ -> StateData
+	    subject_author when is_tuple(Val) ->
+                  StateData#state{subject_author = Val};
+	    subject_author when is_binary(Val) -> % ejabberd 23.04 or older
+                  StateData#state{subject_author = {Val, #jid{}}};
+            hats_users ->
+                  Hats = maps:from_list(
+                           lists:map(fun({U, H}) -> {U, maps:from_list(H)} end,
+                                     Val)),
+                  StateData#state{hats_users = Hats};
+	    hibernation_time -> StateData;
+	    Other ->
+                  ?INFO_MSG("Unknown MUC room option, will be discarded: ~p", [Other]),
+                  StateData
 	  end,
-    set_opts(Opts, NSD).
+    set_opts2(Opts, NSD).
 
 -spec set_vcard_xupdate(state()) -> state().
 set_vcard_xupdate(#state{config =
@@ -4082,22 +4414,34 @@ set_vcard_xupdate(#state{config =
 set_vcard_xupdate(State) ->
     State.
 
+get_occupant_initial_role(Jid, Affiliation, #state{roles = Roles} = StateData) ->
+    DefaultRole = get_default_role(Affiliation, StateData),
+    case (StateData#state.config)#config.moderated of
+        true ->
+            get_occupant_stored_role(Jid, Roles, DefaultRole);
+        false ->
+            DefaultRole
+    end.
+
+get_occupant_stored_role(Jid, Roles, DefaultRole) ->
+    maps:get(jid:split(jid:remove_resource(Jid)), Roles, DefaultRole).
+
 -define(MAKE_CONFIG_OPT(Opt),
 	{get_config_opt_name(Opt), element(Opt, Config)}).
 
--spec make_opts(state()) -> [{atom(), any()}].
-make_opts(StateData) ->
+-spec make_opts(state(), boolean()) -> [{atom(), any()}].
+make_opts(StateData, Hibernation) ->
     Config = StateData#state.config,
-    Subscribers = maps:fold(
+    Subscribers = muc_subscribers_fold(
 		    fun(_LJID, Sub, Acc) ->
 			    [{Sub#subscriber.jid,
 			      Sub#subscriber.nick,
 			      Sub#subscriber.nodes}|Acc]
-		    end, [], StateData#state.subscribers),
+		    end, [], StateData#state.muc_subscribers),
     [?MAKE_CONFIG_OPT(#config.title), ?MAKE_CONFIG_OPT(#config.description),
      ?MAKE_CONFIG_OPT(#config.allow_change_subj),
      ?MAKE_CONFIG_OPT(#config.allow_query_users),
-     ?MAKE_CONFIG_OPT(#config.allow_private_messages),
+     ?MAKE_CONFIG_OPT(#config.allowpm),
      ?MAKE_CONFIG_OPT(#config.allow_private_messages_from_visitors),
      ?MAKE_CONFIG_OPT(#config.allow_visitor_status),
      ?MAKE_CONFIG_OPT(#config.allow_visitor_nickchange),
@@ -4119,15 +4463,20 @@ make_opts(StateData) ->
      ?MAKE_CONFIG_OPT(#config.vcard),
      ?MAKE_CONFIG_OPT(#config.vcard_xupdate),
      ?MAKE_CONFIG_OPT(#config.pubsub),
+     ?MAKE_CONFIG_OPT(#config.enable_hats),
      ?MAKE_CONFIG_OPT(#config.lang),
      {captcha_whitelist,
       (?SETS):to_list((StateData#state.config)#config.captcha_whitelist)},
      {affiliations,
       maps:to_list(StateData#state.affiliations)},
+     {roles, maps:to_list(StateData#state.roles)},
      {subject, StateData#state.subject},
      {subject_author, StateData#state.subject_author},
      {room_id, StateData#state.room_id},
-     {hibernation_time, erlang:system_time(microsecond)},
+     {hats_users,
+      lists:map(fun({U, H}) -> {U, maps:to_list(H)} end,
+                maps:to_list(StateData#state.hats_users))},
+     {hibernation_time, if Hibernation -> erlang:system_time(microsecond); true -> undefined end},
      {subscribers, Subscribers}].
 
 expand_opts(CompactOpts) ->
@@ -4148,7 +4497,7 @@ expand_opts(CompactOpts) ->
                           {Pos+1, [{Field, Val}|Opts]}
                   end
           end, {2, []}, Fields),
-    SubjectAuthor = proplists:get_value(subject_author, CompactOpts, <<"">>),
+    SubjectAuthor = proplists:get_value(subject_author, CompactOpts, {<<"">>, #jid{}}),
     Subject = proplists:get_value(subject, CompactOpts, <<"">>),
     Subscribers = proplists:get_value(subscribers, CompactOpts, []),
     HibernationTime = proplists:get_value(hibernation_time, CompactOpts, 0),
@@ -4176,7 +4525,8 @@ destroy_room(DEl, StateData) ->
 	      send_wrapped(jid:replace_resource(StateData#state.jid, Nick),
 			   Info#user.jid, Packet,
 			   ?NS_MUCSUB_NODES_CONFIG, StateData)
-      end, ok, get_users_and_subscribers(StateData)),
+      end, ok, get_users_and_subscribers_with_node(
+                 ?NS_MUCSUB_NODES_CONFIG, StateData)),
     forget_room(StateData),
     {result, undefined, stop}.
 
@@ -4213,9 +4563,12 @@ maybe_forget_room(StateData) ->
 	end).
 
 -spec make_disco_info(jid(), state()) -> disco_info().
-make_disco_info(_From, StateData) ->
+make_disco_info(From, StateData) ->
     Config = StateData#state.config,
+    ServerHost = StateData#state.server_host,
+    AccessRegister = mod_muc_opt:access_register(ServerHost),
     Feats = [?NS_VCARD, ?NS_MUC, ?NS_DISCO_INFO, ?NS_DISCO_ITEMS,
+             ?NS_COMMANDS, ?NS_MESSAGE_MODERATE, ?NS_MESSAGE_RETRACT,
 	     ?CONFIG_OPT_TO_FEATURE((Config#config.public),
 				    <<"muc_public">>, <<"muc_hidden">>),
 	     ?CONFIG_OPT_TO_FEATURE((Config#config.persistent),
@@ -4228,9 +4581,19 @@ make_disco_info(_From, StateData) ->
 				    <<"muc_moderated">>, <<"muc_unmoderated">>),
 	     ?CONFIG_OPT_TO_FEATURE((Config#config.password_protected),
 				    <<"muc_passwordprotected">>, <<"muc_unsecured">>)]
+	++ case acl:match_rule(ServerHost, AccessRegister, From) of
+	       allow -> [?NS_REGISTER];
+	       deny -> []
+	   end
 	++ case Config#config.allow_subscription of
 	       true -> [?NS_MUCSUB];
 	       false -> []
+	   end
+	++ case gen_mod:is_loaded(StateData#state.server_host, mod_muc_occupantid) of
+	       true ->
+		   [?NS_OCCUPANT_ID];
+	       _ ->
+		   []
 	   end
 	++ case {gen_mod:is_loaded(StateData#state.server_host, mod_mam),
 		 Config#config.mam} of
@@ -4256,6 +4619,77 @@ process_iq_disco_info(From, #iq{type = get, lang = Lang,
     Extras = iq_disco_info_extras(Lang, StateData, false),
     {result, DiscoInfo#disco_info{xdata = [Extras]}};
 process_iq_disco_info(From, #iq{type = get, lang = Lang,
+				sub_els = [#disco_info{node = ?NS_COMMANDS}]},
+		      StateData) ->
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            {result,
+             #disco_info{
+                identities = [#identity{category = <<"automation">>,
+                                        type = <<"command-list">>,
+                                        name = translate:translate(
+                                                 Lang, ?T("Commands"))}]}};
+        false ->
+            Txt = ?T("Node not found"),
+            {error, xmpp:err_item_not_found(Txt, Lang)}
+    end;
+process_iq_disco_info(From, #iq{type = get, lang = Lang,
+				sub_els = [#disco_info{node = ?MUC_HAT_ADD_CMD}]},
+		      StateData) ->
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            {result,
+             #disco_info{
+                identities = [#identity{category = <<"automation">>,
+                                        type = <<"command-node">>,
+                                        name = translate:translate(
+                                              Lang, ?T("Add a hat to a user"))}],
+                features = [?NS_COMMANDS]}};
+        false ->
+            Txt = ?T("Node not found"),
+            {error, xmpp:err_item_not_found(Txt, Lang)}
+    end;
+process_iq_disco_info(From, #iq{type = get, lang = Lang,
+				sub_els = [#disco_info{node = ?MUC_HAT_REMOVE_CMD}]},
+		      StateData) ->
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            {result,
+             #disco_info{
+                identities = [#identity{category = <<"automation">>,
+                                        type = <<"command-node">>,
+                                        name = translate:translate(
+                                              Lang, ?T("Remove a hat from a user"))}],
+                features = [?NS_COMMANDS]}};
+        false ->
+            Txt = ?T("Node not found"),
+            {error, xmpp:err_item_not_found(Txt, Lang)}
+    end;
+process_iq_disco_info(From, #iq{type = get, lang = Lang,
+				sub_els = [#disco_info{node = ?MUC_HAT_LIST_CMD}]},
+		      StateData) ->
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            {result,
+             #disco_info{
+                identities = [#identity{category = <<"automation">>,
+                                        type = <<"command-node">>,
+                                        name = translate:translate(
+                                              Lang, ?T("List users with hats"))}],
+                features = [?NS_COMMANDS]}};
+        false ->
+            Txt = ?T("Node not found"),
+            {error, xmpp:err_item_not_found(Txt, Lang)}
+    end;
+process_iq_disco_info(From, #iq{type = get, lang = Lang,
 				sub_els = [#disco_info{node = Node}]},
 		      StateData) ->
     try
@@ -4275,20 +4709,13 @@ process_iq_disco_info(From, #iq{type = get, lang = Lang,
 iq_disco_info_extras(Lang, StateData, Static) ->
     % ?INFO_MSG("iq_disco_info_extras:", []),
     Config = StateData#state.config,
-    AllowPM = case Config#config.allow_private_messages of
-		  false -> none;
-		  true ->
-		      case Config#config.allow_private_messages_from_visitors of
-			  nobody -> participants;
-			  _ -> anyone
-		      end
-	      end,
     Fs1 = [{roomname, Config#config.title},
 	   {created_timestamp, StateData#state.created_timestamp},
 	   {description, Config#config.description},
 	%    {contactjid, get_owners(StateData)},
 	   {changesubject, Config#config.allow_change_subj},
 	   {allowinvites, Config#config.allow_user_invites},
+	   {allow_query_users, Config#config.allow_query_users},
 	   {allowpm, AllowPM},
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
@@ -4361,6 +4788,46 @@ process_iq_disco_items(From, #iq{type = get, sub_els = [#disco_items{node = <<>>
 		%% (http://xmpp.org/extensions/xep-0045.html#disco-roomitems)
 		{result, #disco_items{}}
 	  end
+    end;
+process_iq_disco_items(From, #iq{type = get, lang = Lang,
+                                 sub_els = [#disco_items{node = ?NS_COMMANDS}]},
+		       StateData) ->
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            {result,
+             #disco_items{
+                items = [#disco_item{jid = StateData#state.jid,
+                                     node = ?MUC_HAT_ADD_CMD,
+                                     name = translate:translate(
+                                              Lang, ?T("Add a hat to a user"))},
+                         #disco_item{jid = StateData#state.jid,
+                                     node = ?MUC_HAT_REMOVE_CMD,
+                                     name = translate:translate(
+                                              Lang, ?T("Remove a hat from a user"))},
+                         #disco_item{jid = StateData#state.jid,
+                                     node = ?MUC_HAT_LIST_CMD,
+                                     name = translate:translate(
+                                              Lang, ?T("List users with hats"))}]}};
+        false ->
+            Txt = ?T("Node not found"),
+            {error, xmpp:err_item_not_found(Txt, Lang)}
+    end;
+process_iq_disco_items(From, #iq{type = get, lang = Lang,
+                                 sub_els = [#disco_items{node = Node}]},
+		       StateData)
+  when Node == ?MUC_HAT_ADD_CMD;
+       Node == ?MUC_HAT_REMOVE_CMD;
+       Node == ?MUC_HAT_LIST_CMD ->
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            {result, #disco_items{}};
+        false ->
+            Txt = ?T("Node not found"),
+            {error, xmpp:err_item_not_found(Txt, Lang)}
     end;
 process_iq_disco_items(_From, #iq{lang = Lang}, _StateData) ->
     Txt = ?T("Node not found"),
@@ -4438,30 +4905,35 @@ process_iq_mucsub(From,
 		      sub_els = [#muc_subscribe{nick = Nick}]} = Packet,
 		  StateData) ->
     LBareJID = jid:tolower(jid:remove_resource(From)),
-    try maps:get(LBareJID, StateData#state.subscribers) of
+    try muc_subscribers_get(LBareJID, StateData#state.muc_subscribers) of
 	#subscriber{nick = Nick1} when Nick1 /= Nick ->
 	    Nodes = get_subscription_nodes(Packet),
-	    case {nick_collision(From, Nick, StateData),
-		  mod_muc:can_use_nick(StateData#state.server_host,
-				       StateData#state.host,
-				       From, Nick)} of
-		{true, _} ->
+	    case nick_collision(From, Nick, StateData) of
+                true ->
 		    ErrText = ?T("That nickname is already in use by another occupant"),
 		    {error, xmpp:err_conflict(ErrText, Lang)};
-		{_, false} ->
-		    Err = case Nick of
-			      <<>> ->
-				  xmpp:err_jid_malformed(?T("Nickname can't be empty"),
-							 Lang);
-			      _ ->
-				  xmpp:err_conflict(?T("That nickname is registered"
-						       " by another person"), Lang)
-			  end,
-		    {error, Err};
-		_ ->
-		    NewStateData = set_subscriber(From, Nick, Nodes, StateData),
-		    {result, subscribe_result(Packet), NewStateData}
-	    end;
+                false ->
+                    case mod_muc:can_use_nick(StateData#state.server_host,
+                                              jid:encode(StateData#state.jid),
+                                              From, Nick) of
+                        false ->
+                            Err = case Nick of
+                                      <<>> ->
+                                          xmpp:err_jid_malformed(
+                                            ?T("Nickname can't be empty"),
+                                            Lang);
+                                      _ ->
+                                          xmpp:err_conflict(
+                                            ?T("That nickname is registered"
+                                               " by another person"), Lang)
+                                  end,
+                            {error, Err};
+                        true ->
+                            NewStateData =
+                                set_subscriber(From, Nick, Nodes, StateData),
+                            {result, subscribe_result(Packet), NewStateData}
+                    end
+            end;
 	#subscriber{} ->
 	    Nodes = get_subscription_nodes(Packet),
 	    NewStateData = set_subscriber(From, Nick, Nodes, StateData),
@@ -4488,15 +4960,27 @@ process_iq_mucsub(From, #iq{type = set, sub_els = [#muc_unsubscribe{}]},
 		  #state{room = Room, host = Host, server_host = ServerHost} = StateData) ->
     BareJID = jid:remove_resource(From),
     LBareJID = jid:tolower(BareJID),
-    try maps:get(LBareJID, StateData#state.subscribers) of
-	#subscriber{nick = Nick} ->
-	    Nicks = maps:remove(Nick, StateData#state.subscriber_nicks),
-	    Subscribers = maps:remove(LBareJID, StateData#state.subscribers),
-	    NewStateData = StateData#state{subscribers = Subscribers,
-					   subscriber_nicks = Nicks},
+    try muc_subscribers_remove_exn(LBareJID, StateData#state.muc_subscribers) of
+	{MUCSubscribers, #subscriber{nick = Nick}} ->
+	    NewStateData = StateData#state{muc_subscribers = MUCSubscribers},
 	    store_room(NewStateData, [{del_subscription, LBareJID}]),
-	    send_subscriptions_change_notifications(BareJID, Nick, unsubscribe, StateData),
-	    ejabberd_hooks:run(muc_unsubscribed, ServerHost, [ServerHost, Room, Host, BareJID]),
+	    Packet1a = #message{
+		sub_els = [#ps_event{
+		    items = #ps_items{
+			node = ?NS_MUCSUB_NODES_SUBSCRIBERS,
+			items = [#ps_item{
+			    id = p1_rand:get_string(),
+			    sub_els = [#muc_unsubscribe{jid = BareJID, nick = Nick}]}]}}]},
+	    Packet1b = #message{
+		sub_els = [#ps_event{
+		    items = #ps_items{
+			node = ?NS_MUCSUB_NODES_SUBSCRIBERS,
+			items = [#ps_item{
+			    id = p1_rand:get_string(),
+			    sub_els = [#muc_unsubscribe{nick = Nick}]}]}}]},
+	    {Packet2a, Packet2b} = ejabberd_hooks:run_fold(muc_unsubscribed, ServerHost, {Packet1a, Packet1b},
+							   [ServerHost, Room, Host, BareJID, StateData]),
+	    send_subscriptions_change_notifications(Packet2a, Packet2b, StateData),
 	    NewStateData2 = case close_room_if_temporary_and_empty(NewStateData) of
 		{stop, normal, _} -> stop;
 		{next_state, normal_state, SD} -> SD
@@ -4516,7 +5000,7 @@ process_iq_mucsub(From, #iq{type = get, lang = Lang,
 	true ->
 	    ShowJid = IsModerator orelse
 		      (StateData#state.config)#config.anonymous == false,
-	    Subs = maps:fold(
+	    Subs = muc_subscribers_fold(
 		     fun(_, #subscriber{jid = J, nick = N, nodes = Nodes}, Acc) ->
 			 case ShowJid of
 			     true ->
@@ -4524,7 +5008,7 @@ process_iq_mucsub(From, #iq{type = get, lang = Lang,
 			     _ ->
 				 [#muc_subscription{nick = N, events = Nodes}|Acc]
 			 end
-		     end, [], StateData#state.subscribers),
+		     end, [], StateData#state.muc_subscribers),
 	    {result, #muc_subscriptions{list = Subs}, StateData};
 	_ ->
 	    Txt = ?T("Moderator privileges required"),
@@ -4537,8 +5021,7 @@ process_iq_mucsub(_From, #iq{type = get, lang = Lang}, _StateData) ->
 -spec remove_subscriptions(state()) -> state().
 remove_subscriptions(StateData) ->
     if not (StateData#state.config)#config.allow_subscription ->
-	    StateData#state{subscribers = #{},
-			    subscriber_nicks = #{}};
+	    StateData#state{muc_subscribers = muc_subscribers_new()};
        true ->
 	    StateData
     end.
@@ -4602,6 +5085,323 @@ get_mucroom_disco_items(StateData) ->
 				    name = Nick}|Acc]
 	       end, [], StateData#state.nicks),
     #disco_items{items = Items}.
+
+-spec process_iq_adhoc(jid(), iq(), state()) ->
+			      {result, adhoc_command()} |
+			      {result, adhoc_command(), state()} |
+			      {error, stanza_error()}.
+process_iq_adhoc(_From, #iq{type = get}, _StateData) ->
+    {error, xmpp:err_bad_request()};
+process_iq_adhoc(From, #iq{type = set, lang = Lang1,
+                           sub_els = [#adhoc_command{} = Request]},
+		 StateData) ->
+    % Ad-Hoc Commands are used only for Hats here
+    case (StateData#state.config)#config.enable_hats andalso
+        is_admin(From, StateData)
+    of
+        true ->
+            #adhoc_command{lang = Lang2, node = Node,
+                           action = Action, xdata = XData} = Request,
+            Lang = case Lang2 of
+                       <<"">> -> Lang1;
+                       _ -> Lang2
+                   end,
+            case {Node, Action} of
+                {_, cancel} ->
+                    {result,
+                     xmpp_util:make_adhoc_response(
+                       Request,
+                       #adhoc_command{status = canceled, lang = Lang,
+                                      node = Node})};
+                {?MUC_HAT_ADD_CMD, execute} ->
+                    Form =
+                        #xdata{
+                           title = translate:translate(
+                                     Lang, ?T("Add a hat to a user")),
+                           type = form,
+                           fields =
+                               [#xdata_field{
+                                   type = 'jid-single',
+                                   label = translate:translate(Lang, ?T("Jabber ID")),
+                                   required = true,
+                                   var = <<"jid">>},
+                                #xdata_field{
+                                   type = 'text-single',
+                                   label = translate:translate(Lang, ?T("Hat title")),
+                                   var = <<"hat_title">>},
+                                #xdata_field{
+                                   type = 'text-single',
+                                   label = translate:translate(Lang, ?T("Hat URI")),
+                                   required = true,
+                                   var = <<"hat_uri">>}
+                               ]},
+                    {result,
+                     xmpp_util:make_adhoc_response(
+                       Request,
+                       #adhoc_command{
+                          status = executing,
+                          xdata = Form})};
+                {?MUC_HAT_ADD_CMD, complete} when XData /= undefined ->
+                    JID = try
+                              jid:decode(hd(xmpp_util:get_xdata_values(
+                                              <<"jid">>, XData)))
+                          catch _:_ -> error
+                          end,
+                    URI = try
+                              hd(xmpp_util:get_xdata_values(
+                                   <<"hat_uri">>, XData))
+                          catch _:_ -> error
+                          end,
+                    Title = case xmpp_util:get_xdata_values(
+                                   <<"hat_title">>, XData) of
+                                [] -> <<"">>;
+                                [T] -> T
+                            end,
+                    if
+                        (JID /= error) and (URI /= error) ->
+                            case add_hat(JID, URI, Title, StateData) of
+                                {ok, NewStateData} ->
+                                    store_room(NewStateData),
+                                    send_update_presence(
+                                      JID, NewStateData, StateData),
+                                    {result,
+                                     xmpp_util:make_adhoc_response(
+                                       Request,
+                                       #adhoc_command{status = completed}),
+                                     NewStateData};
+                                {error, size_limit} ->
+                                    Txt = ?T("Hats limit exceeded"),
+                                    {error, xmpp:err_not_allowed(Txt, Lang)}
+                            end;
+                        true ->
+                            {error, xmpp:err_bad_request()}
+                    end;
+                {?MUC_HAT_ADD_CMD, complete} ->
+                    {error, xmpp:err_bad_request()};
+                {?MUC_HAT_ADD_CMD, _} ->
+                    Txt = ?T("Incorrect value of 'action' attribute"),
+                    {error, xmpp:err_bad_request(Txt, Lang)};
+                {?MUC_HAT_REMOVE_CMD, execute} ->
+                    Form =
+                        #xdata{
+                           title = translate:translate(
+                                     Lang, ?T("Remove a hat from a user")),
+                           type = form,
+                           fields =
+                               [#xdata_field{
+                                   type = 'jid-single',
+                                   label = translate:translate(Lang, ?T("Jabber ID")),
+                                   required = true,
+                                   var = <<"jid">>},
+                                #xdata_field{
+                                   type = 'text-single',
+                                   label = translate:translate(Lang, ?T("Hat URI")),
+                                   required = true,
+                                   var = <<"hat_uri">>}
+                               ]},
+                    {result,
+                     xmpp_util:make_adhoc_response(
+                       Request,
+                       #adhoc_command{
+                          status = executing,
+                          xdata = Form})};
+                {?MUC_HAT_REMOVE_CMD, complete} when XData /= undefined ->
+                    JID = try
+                              jid:decode(hd(xmpp_util:get_xdata_values(
+                                              <<"jid">>, XData)))
+                          catch _:_ -> error
+                          end,
+                    URI = try
+                              hd(xmpp_util:get_xdata_values(
+                                   <<"hat_uri">>, XData))
+                          catch _:_ -> error
+                          end,
+                    if
+                        (JID /= error) and (URI /= error) ->
+                            NewStateData = del_hat(JID, URI, StateData),
+                            store_room(NewStateData),
+                            send_update_presence(
+                              JID, NewStateData, StateData),
+                            {result,
+                             xmpp_util:make_adhoc_response(
+                               Request,
+                               #adhoc_command{status = completed}),
+                             NewStateData};
+                        true ->
+                            {error, xmpp:err_bad_request()}
+                    end;
+                {?MUC_HAT_REMOVE_CMD, complete} ->
+                    {error, xmpp:err_bad_request()};
+                {?MUC_HAT_REMOVE_CMD, _} ->
+                    Txt = ?T("Incorrect value of 'action' attribute"),
+                    {error, xmpp:err_bad_request(Txt, Lang)};
+                {?MUC_HAT_LIST_CMD, execute} ->
+                    Hats = get_all_hats(StateData),
+                    Items =
+                        lists:map(
+                          fun({JID, URI, Title}) ->
+                                  [#xdata_field{
+                                      var = <<"jid">>,
+                                      values = [jid:encode(JID)]},
+                                   #xdata_field{
+                                      var = <<"hat_title">>,
+                                      values = [URI]},
+                                   #xdata_field{
+                                      var = <<"hat_uri">>,
+                                      values = [Title]}]
+                          end, Hats),
+                    Form =
+                        #xdata{
+                           title = translate:translate(
+                                     Lang, ?T("List of users with hats")),
+                           type = result,
+                           reported =
+                               [#xdata_field{
+                                   label = translate:translate(Lang, ?T("Jabber ID")),
+                                   var = <<"jid">>},
+                                #xdata_field{
+                                   label = translate:translate(Lang, ?T("Hat title")),
+                                   var = <<"hat_title">>},
+                                #xdata_field{
+                                   label = translate:translate(Lang, ?T("Hat URI")),
+                                   var = <<"hat_uri">>}],
+                           items = Items},
+                    {result,
+                     xmpp_util:make_adhoc_response(
+                       Request,
+                       #adhoc_command{
+                          status = completed,
+                          xdata = Form})};
+                {?MUC_HAT_LIST_CMD, _} ->
+                    Txt = ?T("Incorrect value of 'action' attribute"),
+                    {error, xmpp:err_bad_request(Txt, Lang)};
+                _ ->
+                    {error, xmpp:err_item_not_found()}
+            end;
+	_ ->
+	    {error, xmpp:err_forbidden()}
+    end.
+
+-spec add_hat(jid(), binary(), binary(), state()) ->
+                     {ok, state()} | {error, size_limit}.
+add_hat(JID, URI, Title, StateData) ->
+    Hats = StateData#state.hats_users,
+    LJID = jid:remove_resource(jid:tolower(JID)),
+    UserHats = maps:get(LJID, Hats, #{}),
+    UserHats2 = maps:put(URI, Title, UserHats),
+    USize = maps:size(UserHats2),
+    if
+        USize =< ?MAX_HATS_PER_USER ->
+            Hats2 = maps:put(LJID, UserHats2, Hats),
+            Size = maps:size(Hats2),
+            if
+                Size =< ?MAX_HATS_USERS ->
+                    {ok, StateData#state{hats_users = Hats2}};
+                true ->
+                    {error, size_limit}
+            end;
+        true ->
+            {error, size_limit}
+    end.
+
+-spec del_hat(jid(), binary(), state()) -> state().
+del_hat(JID, URI, StateData) ->
+    Hats = StateData#state.hats_users,
+    LJID = jid:remove_resource(jid:tolower(JID)),
+    UserHats = maps:get(LJID, Hats, #{}),
+    UserHats2 = maps:remove(URI, UserHats),
+    Hats2 =
+        case maps:size(UserHats2) of
+            0 ->
+                maps:remove(LJID, Hats);
+            _ ->
+                maps:put(LJID, UserHats2, Hats)
+        end,
+    StateData#state{hats_users = Hats2}.
+
+-spec get_all_hats(state()) -> list({jid(), binary(), binary()}).
+get_all_hats(StateData) ->
+    lists:flatmap(
+      fun({LJID, H}) ->
+              JID = jid:make(LJID),
+              lists:map(fun({URI, Title}) -> {JID, URI, Title} end,
+                        maps:to_list(H))
+      end,
+      maps:to_list(StateData#state.hats_users)).
+
+-spec add_presence_hats(jid(), #presence{}, state()) -> #presence{}.
+add_presence_hats(JID, Pres, StateData) ->
+    case (StateData#state.config)#config.enable_hats of
+        true ->
+            Hats = StateData#state.hats_users,
+            LJID = jid:remove_resource(jid:tolower(JID)),
+            UserHats = maps:get(LJID, Hats, #{}),
+            case maps:size(UserHats) of
+                0 -> Pres;
+                _ ->
+                    Items =
+                        lists:map(fun({URI, Title}) ->
+                                          #muc_hat{uri = URI, title = Title}
+                                  end,
+                                  maps:to_list(UserHats)),
+                    xmpp:set_subtag(Pres,
+                                    #muc_hats{hats = Items})
+            end;
+        false ->
+            Pres
+    end.
+
+-spec process_iq_moderate(jid(), iq(), fasten_apply_to(), message_moderate(), state()) ->
+    {result, undefined, state()} |
+    {error, stanza_error()}.
+process_iq_moderate(_From, #iq{type = get}, _ApplyTo, _Moderate, _StateData) ->
+    {error, xmpp:err_bad_request()};
+process_iq_moderate(From, #iq{type = set, lang = Lang},
+		    #fasten_apply_to{id = Id},
+		    #message_moderate{reason = Reason},
+		    #state{config = Config, room = Room, host = Host,
+                           jid = JID, server_host = Server} = StateData) ->
+    FAffiliation = get_affiliation(From, StateData),
+    FRole = get_role(From, StateData),
+    IsModerator = FRole == moderator orelse FAffiliation == owner orelse
+		  FAffiliation == admin,
+    case IsModerator of
+	false ->
+	    {error, xmpp:err_forbidden(
+		?T("Only moderators are allowed to retract messages"), Lang)};
+	_ ->
+	    try binary_to_integer(Id) of
+		StanzaId ->
+		    case Config#config.mam of
+			true ->
+			    mod_mam:remove_message_from_archive({Room, Host}, Server, StanzaId);
+			_ ->
+			    ok
+		    end,
+		    By = jid:replace_resource(JID, find_nick_by_jid(From, StateData)),
+		    Packet0 = #message{type = groupchat,
+                                       from = From,
+				      sub_els = [
+					  #fasten_apply_to{id = Id, sub_els = [
+					      #message_moderated{by = By, reason = Reason,
+								 retract = #message_retract{id = Id}}
+					  ]}]},
+	            {FromNick, _Role} = get_participant_data(From, StateData),
+                    Packet = ejabberd_hooks:run_fold(muc_filter_message,
+						     StateData#state.server_host,
+						     xmpp:put_meta(Packet0, mam_ignore, true),
+						     [StateData, FromNick]),
+		    send_wrapped_multiple(JID,
+					  get_users_and_subscribers_with_node(?NS_MUCSUB_NODES_MESSAGES, StateData),
+					  Packet, ?NS_MUCSUB_NODES_MESSAGES, StateData),
+		    NSD = add_message_to_history(<<"">>,
+						 StateData#state.jid, Packet, StateData),
+		    {result, undefined, remove_from_history(StanzaId, NSD)}
+	    catch _:_ ->
+		{error, xmpp:err_bad_request(
+		    ?T("Stanza id is not valid"), Lang)}
+	    end
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Voice request support
@@ -4740,13 +5540,13 @@ add_to_log(Type, Data, StateData)
     when Type == roomconfig_change_disabledlogging ->
     mod_muc_log:add_to_log(StateData#state.server_host,
 			   roomconfig_change, Data, StateData#state.jid,
-			   make_opts(StateData));
+			   make_opts(StateData, false));
 add_to_log(Type, Data, StateData) ->
     case (StateData#state.config)#config.logging of
       true ->
 	  mod_muc_log:add_to_log(StateData#state.server_host,
 				 Type, Data, StateData#state.jid,
-				 make_opts(StateData));
+				 make_opts(StateData, false));
       false -> ok
     end.
 
@@ -4790,7 +5590,7 @@ store_room(StateData, ChangesHints) ->
 	true ->
 	    ok;
 	_ ->
-	    erlang:put(muc_subscribers, StateData#state.subscribers)
+	    erlang:put(muc_subscribers, StateData#state.muc_subscribers#muc_subscribers.subscribers)
     end,
     ShouldStore = case (StateData#state.config)#config.persistent of
 		      true ->
@@ -4804,50 +5604,53 @@ store_room(StateData, ChangesHints) ->
 			  end
 		  end,
     if ShouldStore ->
-	    store_room_no_checks(StateData, ChangesHints);
+            case erlang:function_exported(Mod, store_changes, 4) of
+                true when ChangesHints /= [] ->
+                    mod_muc:store_changes(
+                      StateData#state.server_host,
+                      StateData#state.host, StateData#state.room,
+                      ChangesHints);
+                _ ->
+                    store_room_no_checks(StateData, ChangesHints, false),
+		    ok
+            end;
        true ->
 	    ok
     end.
 
-store_room_no_checks(StateData, ChangesHints) ->
+-spec store_room_no_checks(state(), list(), boolean()) -> {atomic, any()}.
+store_room_no_checks(StateData, ChangesHints, Hibernation) ->
     mod_muc:store_room(StateData#state.server_host,
 		       StateData#state.host, StateData#state.room,
-		       make_opts(StateData),
+		       make_opts(StateData, Hibernation),
 		       ChangesHints).
 
--spec send_subscriptions_change_notifications(jid(), binary(), subscribe|unsubscribe, state()) -> ok.
-send_subscriptions_change_notifications(From, Nick, Type, State) ->
-    maps:fold(fun(_, #subscriber{nodes = Nodes, jid = JID}, _) ->
-		    case lists:member(?NS_MUCSUB_NODES_SUBSCRIBERS, Nodes) of
-			true ->
-			    ShowJid = case (State#state.config)#config.anonymous == false orelse
-					   get_role(JID, State) == moderator orelse
-					   get_default_role(get_affiliation(JID, State), State) == moderator of
-					  true -> true;
-					  _ -> false
-				      end,
-			    Payload = case {Type, ShowJid} of
-					 {subscribe, true} ->
-					     #muc_subscribe{jid = From, nick = Nick};
-					 {subscribe, _} ->
-					     #muc_subscribe{nick = Nick};
-					 {unsubscribe, true} ->
-					     #muc_unsubscribe{jid = From, nick = Nick};
-					 {unsubscribe, _} ->
-					     #muc_unsubscribe{nick = Nick}
-				     end,
-			    Packet = #message{
-				sub_els = [#ps_event{
-				    items = #ps_items{
-					node = ?NS_MUCSUB_NODES_SUBSCRIBERS,
-					items = [#ps_item{
-					    id = p1_rand:get_string(),
-					    sub_els = [Payload]}]}}]},
-			    ejabberd_router:route(xmpp:set_from_to(Packet, State#state.jid, JID));
-			false ->
-			    ok
-		    end
-	       end, ok, State#state.subscribers).
+-spec send_subscriptions_change_notifications(stanza(), stanza(), state()) -> ok.
+send_subscriptions_change_notifications(Packet, PacketWithoutJid, State) ->
+    {WJ, WN} =
+        maps:fold(
+          fun(_, #subscriber{jid = JID}, {WithJid, WithNick}) ->
+                  case (State#state.config)#config.anonymous == false orelse
+                      get_role(JID, State) == moderator orelse
+                      get_default_role(get_affiliation(JID, State), State) == moderator of
+                      true ->
+                          {[JID | WithJid], WithNick};
+                      _ ->
+                          {WithJid, [JID | WithNick]}
+                  end
+          end, {[], []},
+          muc_subscribers_get_by_node(?NS_MUCSUB_NODES_SUBSCRIBERS,
+                                      State#state.muc_subscribers)),
+    if WJ /= [] ->
+	ejabberd_router_multicast:route_multicast(State#state.jid, State#state.server_host,
+						  WJ, Packet, false);
+	true -> ok
+    end,
+    if WN /= [] ->
+	ejabberd_router_multicast:route_multicast(State#state.jid, State#state.server_host,
+						  WN, PacketWithoutJid, false);
+	true -> ok
+    end.
 
 -spec send_wrapped(jid(), jid(), stanza(), binary(), state()) -> ok.
 send_wrapped(From, To, Packet, Node, State) ->
@@ -4859,7 +5662,7 @@ send_wrapped(From, To, Packet, Node, State) ->
 		    _ -> false
 		end,
     if IsOffline ->
-	    try maps:get(LBareTo, State#state.subscribers) of
+	    try muc_subscribers_get(LBareTo, State#state.muc_subscribers) of
 		#subscriber{nodes = Nodes, jid = JID} ->
 		    case lists:member(Node, Nodes) of
 			true ->
@@ -4906,7 +5709,7 @@ send_wrapped(From, To, Packet, Node, State) ->
 	    ejabberd_router:route(xmpp:set_from_to(Packet, From, To))
     end.
 
--spec wrap(jid(), jid(), stanza(), binary(), binary()) -> message().
+-spec wrap(jid(), undefined | jid(), stanza(), binary(), binary()) -> message().
 wrap(From, To, Packet, Node, Id) ->
     El = xmpp:set_from_to(Packet, From, To),
     #message{
@@ -4920,10 +5723,172 @@ wrap(From, To, Packet, Node, Id) ->
 
 -spec send_wrapped_multiple(jid(), users(), stanza(), binary(), state()) -> ok.
 send_wrapped_multiple(From, Users, Packet, Node, State) ->
+    {Dir, Wra} =
     maps:fold(
-      fun(_, #user{jid = To}, _) ->
-	      send_wrapped(From, To, Packet, Node, State)
-      end, ok, Users).
+	fun(_, #user{jid = To, last_presence = LP}, {Direct, Wrapped} = Res) ->
+	    IsOffline = LP == undefined,
+	    if IsOffline ->
+		LBareTo = jid:tolower(jid:remove_resource(To)),
+		case muc_subscribers_find(LBareTo, State#state.muc_subscribers) of
+		    {ok, #subscriber{nodes = Nodes}} ->
+			case lists:member(Node, Nodes) of
+			    true ->
+				{Direct, [To | Wrapped]};
+			    _ ->
+                                %% TODO: check that this branch is never called
+				Res
+			end;
+		    _ ->
+			Res
+		end;
+		true ->
+		    {[To | Direct], Wrapped}
+	    end
+	end, {[],[]}, Users),
+    case Dir of
+	[] -> ok;
+	_ ->
+	    case Packet of
+		#presence{type = unavailable} ->
+		    case xmpp:get_subtag(Packet, #muc_user{}) of
+			#muc_user{destroy = Destroy,
+				  status_codes = Codes} ->
+			    case Destroy /= undefined orelse
+				 (lists:member(110,Codes) andalso
+				  not lists:member(303, Codes)) of
+				true ->
+				    ejabberd_router_multicast:route_multicast(
+					From, State#state.server_host, Dir,
+					#presence{id = p1_rand:get_string(),
+						  type = unavailable}, false);
+				false ->
+				    ok
+			    end;
+			_ ->
+			    false
+		    end;
+		_ ->
+		    ok
+	    end,
+	    ejabberd_router_multicast:route_multicast(From, State#state.server_host,
+						      Dir, Packet, false)
+    end,
+    case Wra of
+	[] -> ok;
+	_ ->
+	    MamEnabled = (State#state.config)#config.mam,
+	    Id = case xmpp:get_subtag(Packet, #stanza_id{by = #jid{}}) of
+		     #stanza_id{id = Id2} ->
+			 Id2;
+		     _ ->
+			 p1_rand:get_string()
+		 end,
+	    NewPacket = wrap(From, undefined, Packet, Node, Id),
+	    NewPacket2 = xmpp:put_meta(NewPacket, in_muc_mam, MamEnabled),
+	    ejabberd_router_multicast:route_multicast(State#state.jid, State#state.server_host,
+						      Wra, NewPacket2, true)
+    end.
+
+%%%----------------------------------------------------------------------
+%%% #muc_subscribers API
+%%%----------------------------------------------------------------------
+
+-spec muc_subscribers_new() -> #muc_subscribers{}.
+muc_subscribers_new() ->
+    #muc_subscribers{}.
+
+-spec muc_subscribers_get(ljid(), #muc_subscribers{}) -> #subscriber{}.
+muc_subscribers_get({_, _, _} = LJID, MUCSubscribers) ->
+    maps:get(LJID, MUCSubscribers#muc_subscribers.subscribers).
+
+-spec muc_subscribers_find(ljid(), #muc_subscribers{}) ->
+                                  {ok, #subscriber{}} | error.
+muc_subscribers_find({_, _, _} = LJID, MUCSubscribers) ->
+    maps:find(LJID, MUCSubscribers#muc_subscribers.subscribers).
+
+-spec muc_subscribers_is_key(ljid(), #muc_subscribers{}) -> boolean().
+muc_subscribers_is_key({_, _, _} = LJID, MUCSubscribers) ->
+    maps:is_key(LJID, MUCSubscribers#muc_subscribers.subscribers).
+
+-spec muc_subscribers_size(#muc_subscribers{}) -> integer().
+muc_subscribers_size(MUCSubscribers) ->
+    maps:size(MUCSubscribers#muc_subscribers.subscribers).
+
+-spec muc_subscribers_fold(Fun, Acc, #muc_subscribers{}) -> Acc when
+    Fun :: fun((ljid(), #subscriber{}, Acc) -> Acc).
+muc_subscribers_fold(Fun, Init, MUCSubscribers) ->
+    maps:fold(Fun, Init, MUCSubscribers#muc_subscribers.subscribers).
+
+-spec muc_subscribers_get_by_nick(binary(), #muc_subscribers{}) -> [#subscriber{}].
+muc_subscribers_get_by_nick(Nick, MUCSubscribers) ->
+    maps:get(Nick, MUCSubscribers#muc_subscribers.subscriber_nicks, []).
+
+-spec muc_subscribers_get_by_node(binary(), #muc_subscribers{}) -> subscribers().
+muc_subscribers_get_by_node(Node, MUCSubscribers) ->
+    maps:get(Node, MUCSubscribers#muc_subscribers.subscriber_nodes, #{}).
+
+-spec muc_subscribers_remove_exn(ljid(), #muc_subscribers{}) ->
+                                        {#muc_subscribers{}, #subscriber{}}.
+muc_subscribers_remove_exn({_, _, _} = LJID, MUCSubscribers) ->
+    #muc_subscribers{subscribers = Subs,
+                     subscriber_nicks = SubNicks,
+                     subscriber_nodes = SubNodes} = MUCSubscribers,
+    Subscriber = maps:get(LJID, Subs),
+    #subscriber{nick = Nick, nodes = Nodes} = Subscriber,
+    NewSubNicks = maps:remove(Nick, SubNicks),
+    NewSubs = maps:remove(LJID, Subs),
+    NewSubNodes =
+        lists:foldl(
+          fun(Node, Acc) ->
+                  NodeSubs = maps:get(Node, Acc, #{}),
+                  NodeSubs2 = maps:remove(LJID, NodeSubs),
+                  maps:put(Node, NodeSubs2, Acc)
+          end, SubNodes, Nodes),
+    {#muc_subscribers{subscribers = NewSubs,
+                      subscriber_nicks = NewSubNicks,
+                      subscriber_nodes = NewSubNodes}, Subscriber}.
+
+-spec muc_subscribers_put(#subscriber{}, #muc_subscribers{}) ->
+                                 #muc_subscribers{}.
+muc_subscribers_put(Subscriber, MUCSubscribers) ->
+    #subscriber{jid = JID,
+                nick = Nick,
+                nodes = Nodes} = Subscriber,
+    #muc_subscribers{subscribers = Subs,
+                     subscriber_nicks = SubNicks,
+                     subscriber_nodes = SubNodes} = MUCSubscribers,
+    LJID = jid:tolower(JID),
+    NewSubs = maps:put(LJID, Subscriber, Subs),
+    NewSubNicks = maps:put(Nick, [LJID], SubNicks),
+    NewSubNodes =
+        lists:foldl(
+          fun(Node, Acc) ->
+                  NodeSubs = maps:get(Node, Acc, #{}),
+                  NodeSubs2 = maps:put(LJID, Subscriber, NodeSubs),
+                  maps:put(Node, NodeSubs2, Acc)
+          end, SubNodes, Nodes),
+    #muc_subscribers{subscribers = NewSubs,
+                     subscriber_nicks = NewSubNicks,
+                     subscriber_nodes = NewSubNodes}.
+
+
+cleanup_affiliations(State) ->
+    case mod_muc_opt:cleanup_affiliations_on_start(State#state.server_host) of
+        true ->
+            Affiliations =
+                maps:filter(
+                  fun({LUser, LServer, _}, _) ->
+                          case ejabberd_router:is_my_host(LServer) of
+                              true ->
+                                  ejabberd_auth:user_exists(LUser, LServer);
+                              false ->
+                                  true
+                          end
+                  end, State#state.affiliations),
+            State#state{affiliations = Affiliations};
+        false ->
+            State
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Detect messange stanzas that don't have meaningful content

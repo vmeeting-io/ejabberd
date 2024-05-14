@@ -3,7 +3,7 @@
 %%% Created : 22 Apr 2020 by Holger Weiss <holger@zedat.fu-berlin.de>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2020-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2020-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -184,7 +184,7 @@ single_test(T) ->
 
 check_password(Username, Password) ->
     Secret = <<"cryptic">>,
-    Password == base64:encode(crypto:hmac(sha, Secret, Username)).
+    Password == base64:encode(misc:crypto_hmac(sha, Secret, Username)).
 
 check_expires({_, _, _} = Expires) ->
     Now = {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),

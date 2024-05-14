@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" (Add * to the end of field to match substring)"," (adjon * karaktert a mező végéhez a részkarakterláncra illesztéshez)"}.
 {" has set the subject to: "," beállította a tárgyat erre: "}.
 {"A password is required to enter this room","Jelszó szükséges a szobába történő belépéshez"}.
@@ -166,7 +170,6 @@
 {"It is not allowed to send error messages to the room. The participant (~s) has sent an error message (~s) and got kicked from the room","Nem engedélyezett hibaüzeneteket küldeni a szobába. A résztvevő (~s) hibaüzenetet (~s) küldött, és ki lett rúgva a szobából"}.
 {"It is not allowed to send private messages of type \"groupchat\"","Nem engedélyezett „groupchat” típusú személyes üzeneteket küldeni"}.
 {"It is not allowed to send private messages to the conference","Nem engedélyezett személyes üzeneteket küldeni a konferenciába"}.
-{"It is not allowed to send private messages","Nem engedélyezett személyes üzeneteket küldeni"}.
 {"Jabber ID","Jabber-azonosító"}.
 {"January","január"}.
 {"JID normalization denied by service policy","A Jabber-azonosító normalizálása megtagadva a szolgáltatási irányelv miatt"}.
@@ -384,7 +387,6 @@
 {"The query is only allowed from local users","A lekérdezés csak helyi felhasználóktól engedélyezett"}.
 {"The query must not contain <item/> elements","A lekérdezés nem tartalmazhat <item/> elemeket"}.
 {"The stanza MUST contain only one <active/> element, one <default/> element, or one <list/> element","A stanzának csak egyetlen <active/> elemet, egyetlen <default/> elemet vagy egyetlen <list/> elemet KELL tartalmaznia"}.
-{"The username is not valid","A felhasználónév nem érvényes"}.
 {"There was an error creating the account: ","Hiba történt a fiók létrehozásakor: "}.
 {"There was an error deleting the account: ","Hiba történt a fiók törlésekor: "}.
 {"This room is not anonymous","Ez a szoba nem névtelen"}.

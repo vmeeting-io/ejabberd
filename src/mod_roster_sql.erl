@@ -4,7 +4,7 @@
 %%% Created : 14 Apr 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -34,6 +34,7 @@
 	 update_roster/4, del_roster/3, transaction/2,
 	 process_rosteritems/5,
 	 import/3, export/1, raw_to_record/2]).
+-export([sql_schemas/0]).
 
 -include("mod_roster.hrl").
 -include("ejabberd_sql_pt.hrl").
@@ -43,8 +44,54 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-init(_Host, _Opts) ->
+init(Host, _Opts) ->
+    ejabberd_sql_schema:update_schema(Host, ?MODULE, sql_schemas()),
     ok.
+
+sql_schemas() ->
+    [#sql_schema{
+        version = 1,
+        tables =
+            [#sql_table{
+                name = <<"rosterusers">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"jid">>, type = text},
+                     #sql_column{name = <<"nick">>, type = text},
+                     #sql_column{name = <<"subscription">>, type = {char, 1}},
+                     #sql_column{name = <<"ask">>, type = {char, 1}},
+                     #sql_column{name = <<"askmessage">>, type = text},
+                     #sql_column{name = <<"server">>, type = {char, 1}},
+                     #sql_column{name = <<"subscribe">>, type = text},
+                     #sql_column{name = <<"type">>, type = text},
+                     #sql_column{name = <<"created_at">>, type = timestamp,
+                                 default = true}],
+                indices = [#sql_index{
+                              columns = [<<"server_host">>, <<"username">>,
+                                         <<"jid">>],
+                              unique = true},
+                           #sql_index{
+                              columns = [<<"server_host">>, <<"jid">>]}]},
+             #sql_table{
+                name = <<"rostergroups">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"jid">>, type = text},
+                     #sql_column{name = <<"grp">>, type = text}],
+                indices = [#sql_index{
+                              columns = [<<"server_host">>, <<"username">>,
+                                         <<"jid">>]}]},
+             #sql_table{
+                name = <<"roster_version">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"version">>, type = text}],
+                indices = [#sql_index{
+                              columns = [<<"server_host">>, <<"username">>],
+                              unique = true}]}]}].
 
 read_roster_version(LUser, LServer) ->
     case ejabberd_sql:sql_query(
@@ -80,9 +127,10 @@ get_roster(LUser, LServer) ->
 				[]
                         end,
             GroupsDict = lists:foldl(fun({J, G}, Acc) ->
-                                             dict:append(J, G, Acc)
+                                             Gs = maps:get(J, Acc, []),
+                                             maps:put(J, [G | Gs], Acc)
                                      end,
-                                     dict:new(), JIDGroups),
+                                     maps:new(), JIDGroups),
 	    {ok, lists:flatmap(
 		   fun(I) ->
 			   case raw_to_record(LServer, I) of
@@ -90,10 +138,7 @@ get_roster(LUser, LServer) ->
 			       error -> [];
 			       R ->
 				   SJID = jid:encode(R#roster.jid),
-				   Groups = case dict:find(SJID, GroupsDict) of
-						{ok, Gs} -> Gs;
-						error -> []
-					    end,
+                                   Groups = maps:get(SJID, GroupsDict, []),
 				   [R#roster{groups = Groups}]
 			   end
 		   end, Items)};

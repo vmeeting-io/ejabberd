@@ -5,7 +5,7 @@
 %%% Created : 18 Apr 2020 by Holger Weiss <holger@zedat.fu-berlin.de>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2020-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2020-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,7 +25,7 @@
 
 -module(mod_stun_disco).
 -author('holger@zedat.fu-berlin.de').
--protocol({xep, 215, '0.7'}).
+-protocol({xep, 215, '0.7', '20.04', "", ""}).
 
 -behaviour(gen_server).
 -behaviour(gen_mod).
@@ -159,7 +159,8 @@ mod_doc() ->
 	  ?T("This module allows XMPP clients to discover STUN/TURN services "
 	     "and to obtain temporary credentials for using them as per "
 	     "https://xmpp.org/extensions/xep-0215.html"
-	     "[XEP-0215: External Service Discovery]."),
+	     "[XEP-0215: External Service Discovery]. "
+	     "This module is included in ejabberd since version 20.04."),
       opts =>
 	  [{access,
 	    #{value => ?T("AccessName"),
@@ -175,7 +176,7 @@ mod_doc() ->
 		     "clients. If ejabberd's built-in TURN service is used, "
 		     "TURN relays allocated using temporary credentials will "
 		     "be terminated shortly after the credentials expired. The "
-		     "default value is '12' hours. Note that restarting the "
+		     "default value is '12 hours'. Note that restarting the "
 		     "ejabberd node invalidates any temporary credentials "
 		     "offered before the restart unless a 'secret' is "
 		     "specified (see below).")}},
@@ -645,7 +646,7 @@ get_listener_ips(#{ip := {0, 0, 0, 0, 0, 0, 0, 1}} = Opts) ->
     {undefined, get_turn_ipv6_addr(Opts)};
 get_listener_ips(#{ip := {_, _, _, _} = IP}) ->
     {IP, undefined};
-get_listener_ips(#{ip := {_, _, _, _, _,_, _, _, _} = IP}) ->
+get_listener_ips(#{ip := {_, _, _, _, _, _, _, _} = IP}) ->
     {undefined, IP}.
 
 -spec get_turn_ipv4_addr(map()) -> inet:ip4_address() | undefined.

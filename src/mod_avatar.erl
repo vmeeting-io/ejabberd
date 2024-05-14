@@ -3,7 +3,7 @@
 %%% Created : 13 Sep 2017 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -22,7 +22,8 @@
 %%%-------------------------------------------------------------------
 -module(mod_avatar).
 -behaviour(gen_mod).
--protocol({xep, 398, '0.2.0'}).
+
+-protocol({xep, 398, '0.2.0', '18.03', "", ""}).
 
 %% gen_mod API
 -export([start/2, stop/1, reload/3, depends/2, mod_opt_type/1, mod_options/1]).
@@ -43,23 +44,14 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start(Host, _Opts) ->
-    ejabberd_hooks:add(pubsub_publish_item, Host, ?MODULE,
-		       pubsub_publish_item, 50),
-    ejabberd_hooks:add(vcard_iq_set, Host, ?MODULE,
-		       vcard_iq_convert, 30),
-    ejabberd_hooks:add(vcard_iq_set, Host, ?MODULE,
-		       vcard_iq_publish, 100),
-    ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
-		       get_sm_features, 50).
+start(_Host, _Opts) ->
+    {ok, [{hook, pubsub_publish_item, pubsub_publish_item, 50},
+          {hook, vcard_iq_set, vcard_iq_convert, 30},
+          {hook, vcard_iq_set, vcard_iq_publish, 100},
+          {hook, disco_sm_features, get_sm_features, 50}]}.
 
-stop(Host) ->
-    ejabberd_hooks:delete(pubsub_publish_item, Host, ?MODULE,
-			  pubsub_publish_item, 50),
-    ejabberd_hooks:delete(vcard_iq_set, Host, ?MODULE, vcard_iq_convert, 30),
-    ejabberd_hooks:delete(vcard_iq_set, Host, ?MODULE, vcard_iq_publish, 100),
-    ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
-			  get_sm_features, 50).
+stop(_Host) ->
+    ok.
 
 reload(_Host, _NewOpts, _OldOpts) ->
     ok.
@@ -469,13 +461,13 @@ mod_doc() ->
               "[XEP-0398: User Avatar to vCard-Based Avatars Conversion]."), "",
            ?T("Also, the module supports conversion between avatar "
               "image formats on the fly."), "",
-           ?T("The module depends on 'mod_vcard', 'mod_vcard_xupdate' and "
-              "'mod_pubsub'.")],
+           ?T("The module depends on _`mod_vcard`_, _`mod_vcard_xupdate`_ and "
+              "_`mod_pubsub`_.")],
       opts =>
           [{convert,
             #{value => "{From: To}",
               desc =>
-                  ?T("Defines image convertion rules: the format in 'From' "
+                  ?T("Defines image conversion rules: the format in 'From' "
                      "will be converted to format in 'To'. The value of 'From' "
                      "can also be 'default', which is match-all rule. NOTE: "
                      "the list of supported formats is detected at compile time "
@@ -489,4 +481,4 @@ mod_doc() ->
               desc =>
                   ?T("Limit any given JID by the number of avatars it is able "
                      "to convert per minute. This is to protect the server from "
-                     "image convertion DoS. The default value is '10'.")}}]}.
+                     "image conversion DoS. The default value is '10'.")}}]}.

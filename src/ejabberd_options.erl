@@ -1,5 +1,5 @@
 %%%----------------------------------------------------------------------
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -81,6 +81,8 @@ opt_type(auth_password_format) ->
     econf:enum([plain, scram]);
 opt_type(auth_scram_hash) ->
     econf:enum([sha, sha256, sha512]);
+opt_type(auth_external_user_exists_check) ->
+    econf:bool();
 opt_type(auth_use_cache) ->
     econf:bool();
 opt_type(c2s_cafile) ->
@@ -110,13 +112,22 @@ opt_type(cache_missed) ->
 opt_type(cache_size) ->
     econf:pos_int(infinity);
 opt_type(captcha_cmd) ->
-    econf:file();
+    econf:and_then(
+	econf:binary(),
+	fun(V) ->
+		V2 = misc:expand_keyword(<<"@SEMVER@">>, V,
+				    ejabberd_option:version()),
+		misc:expand_keyword(<<"@VERSION">>, V2,
+				    misc:semver_to_xxyy(ejabberd_option:version()))
+	end);
 opt_type(captcha_host) ->
     econf:binary();
 opt_type(captcha_limit) ->
     econf:pos_int(infinity);
 opt_type(captcha_url) ->
-    econf:url();
+    econf:either(
+      econf:url(),
+      econf:enum([auto, undefined]));
 opt_type(certfiles) ->
     econf:list(econf:binary());
 opt_type(cluster_backend) ->
@@ -129,6 +140,8 @@ opt_type(default_ram_db) ->
     econf:enum([mnesia, sql, redis]);
 opt_type(define_macro) ->
     econf:any();
+opt_type(disable_sasl_scram_downgrade_protection) ->
+    econf:bool();
 opt_type(disable_sasl_mechanisms) ->
     econf:list_or_single(
       econf:and_then(
@@ -141,7 +154,7 @@ opt_type(domain_balancing) ->
 	#{component_number => econf:int(2, 1000),
 	  type => econf:enum([random, source, destination,
 			      bare_source, bare_destination])},
-	[{required, [component_number]}, {return, map}, unique]),
+	[{return, map}, unique]),
       [{return, map}]);
 opt_type(ext_api_path_oauth) ->
     econf:binary();
@@ -174,6 +187,8 @@ opt_type(hosts) ->
     econf:non_empty(econf:list(econf:domain(), [unique]));
 opt_type(include_config_file) ->
     econf:any();
+opt_type(install_contrib_modules) ->
+    econf:list(econf:atom());
 opt_type(language) ->
     econf:lang();
 opt_type(ldap_backups) ->
@@ -222,6 +237,12 @@ opt_type(log_rotate_count) ->
     econf:non_neg_int();
 opt_type(log_rotate_size) ->
     econf:pos_int(infinity);
+opt_type(log_burst_limit_window_time) ->
+    econf:timeout(second);
+opt_type(log_burst_limit_count) ->
+    econf:pos_int();
+opt_type(log_modules_fully) ->
+    econf:list(econf:atom());
 opt_type(loglevel) ->
     fun(N) when is_integer(N) ->
 	    (econf:and_then(
@@ -240,6 +261,8 @@ opt_type(negotiation_timeout) ->
 opt_type(net_ticktime) ->
     econf:timeout(second);
 opt_type(new_sql_schema) ->
+    econf:bool();
+opt_type(update_sql_schema) ->
     econf:bool();
 opt_type(oauth_access) ->
     econf:acl();
@@ -407,6 +430,8 @@ opt_type(sql_username) ->
     econf:binary();
 opt_type(sql_prepared_statements) ->
     econf:bool();
+opt_type(sql_flags) ->
+    econf:list_or_single(econf:enum([mysql_alternative_upsert]), [sorted, unique]);
 opt_type(trusted_proxies) ->
     econf:either(all, econf:list(econf:ip_mask()));
 opt_type(use_cache) ->
@@ -502,6 +527,7 @@ options() ->
      {access_rules, []},
      {acme, #{}},
      {allow_contrib_modules, true},
+     {install_contrib_modules, []},
      {allow_multiple_connections, false},
      {anonymous_protocol, sasl_anon},
      {api_permissions,
@@ -522,6 +548,7 @@ options() ->
      {auth_opts, []},
      {auth_password_format, plain},
      {auth_scram_hash, sha},
+     {auth_external_user_exists_check, true},
      {auth_use_cache,
       fun(Host) -> ejabberd_config:get_option({use_cache, Host}) end},
      {c2s_cafile, undefined},
@@ -533,11 +560,12 @@ options() ->
      {captcha_cmd, undefined},
      {captcha_host, <<"">>},
      {captcha_limit, infinity},
-     {captcha_url, undefined},
+     {captcha_url, auto},
      {certfiles, undefined},
      {cluster_backend, mnesia},
      {cluster_nodes, []},
      {define_macro, []},
+     {disable_sasl_scram_downgrade_protection, false},
      {disable_sasl_mechanisms, []},
      {domain_balancing, #{}},
      {ext_api_headers, <<>>},
@@ -576,11 +604,15 @@ options() ->
      {listen, []},
      {log_rotate_count, 1},
      {log_rotate_size, 10*1024*1024},
+     {log_burst_limit_window_time, timer:seconds(1)},
+     {log_burst_limit_count, 500},
+     {log_modules_fully, []},
      {max_fsm_queue, undefined},
      {modules, []},
-     {negotiation_timeout, timer:seconds(30)},
+     {negotiation_timeout, timer:seconds(120)},
      {net_ticktime, timer:seconds(60)},
      {new_sql_schema, ?USE_NEW_SQL_SCHEMA_DEFAULT},
+     {update_sql_schema, false},
      {oauth_access, none},
      {oauth_cache_life_time,
       fun(Host) -> ejabberd_config:get_option({cache_life_time, Host}) end},
@@ -598,7 +630,7 @@ options() ->
      {oom_killer, true},
      {oom_queue, 10000},
      {oom_watermark, 80},
-     {outgoing_s2s_families, [inet, inet6]},
+     {outgoing_s2s_families, [inet6, inet]},
      {outgoing_s2s_ipv4_address, undefined},
      {outgoing_s2s_ipv6_address, undefined},
      {outgoing_s2s_port, 5269},
@@ -638,7 +670,7 @@ options() ->
      {s2s_protocol_options, undefined},
      {s2s_queue_type,
       fun(Host) -> ejabberd_config:get_option({queue_type, Host}) end},
-     {s2s_timeout, timer:minutes(10)},
+     {s2s_timeout, timer:hours(1)},
      {s2s_tls_compression, undefined},
      {s2s_use_starttls, false},
      {s2s_zlib, false},
@@ -687,6 +719,7 @@ options() ->
      {sql_start_interval, timer:seconds(30)},
      {sql_username, <<"ejabberd">>},
      {sql_prepared_statements, true},
+     {sql_flags, []},
      {trusted_proxies, []},
      {validate_stream, false},
      {websocket_origin, []},
@@ -718,13 +751,18 @@ globals() ->
      fqdn,
      hosts,
      host_config,
+     install_contrib_modules,
      listen,
      loglevel,
      log_rotate_count,
      log_rotate_size,
+     log_burst_limit_count,
+     log_burst_limit_window_time,
+     log_modules_fully,
      negotiation_timeout,
      net_ticktime,
      new_sql_schema,
+     update_sql_schema,
      node_start,
      oauth_cache_life_time,
      oauth_cache_missed,

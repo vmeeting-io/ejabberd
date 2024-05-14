@@ -1,6 +1,6 @@
 %%%----------------------------------------------------------------------
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -29,14 +29,47 @@
 -define(SQL_INSERT_MARK, sql_insert__mark_).
 -define(SQL_INSERT(Table, Fields), ?SQL_INSERT_MARK(Table, Fields)).
 
+-ifdef(COMPILER_REPORTS_ONLY_LINES).
 -record(sql_query, {hash :: binary(),
 		    format_query :: fun(),
 		    format_res :: fun(),
 		    args :: fun(),
+		    flags :: non_neg_integer(),
 		    loc :: {module(), pos_integer()}}).
+-else.
+-record(sql_query, {hash :: binary(),
+		    format_query :: fun(),
+		    format_res :: fun(),
+		    args :: fun(),
+		    flags :: non_neg_integer(),
+		    loc :: {module(), {pos_integer(), pos_integer()}}}).
+-endif.
 
 -record(sql_escape, {string :: fun((binary()) -> binary()),
 		     integer :: fun((integer()) -> binary()),
 		     boolean :: fun((boolean()) -> binary()),
 		     in_array_string :: fun((binary()) -> binary()),
 		     like_escape :: fun(() -> binary())}).
+
+
+-record(sql_index, {columns,
+                    unique = false :: boolean(),
+                    meta = #{}}).
+-record(sql_column, {name :: binary(),
+                     type,
+                     default = false,
+                     opts = []}).
+-record(sql_table, {name :: binary(),
+                    columns :: [#sql_column{}],
+                    indices = [] :: [#sql_index{}],
+                    post_create}).
+-record(sql_schema, {version :: integer(),
+                     tables :: [#sql_table{}],
+                     update = []}).
+-record(sql_references, {table :: binary(),
+                         column :: binary()}).
+
+-record(sql_schema_info,
+        {db_type :: pgsql | mysql | sqlite,
+         db_version :: any(),
+         new_schema = true :: boolean()}).

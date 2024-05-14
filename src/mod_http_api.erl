@@ -5,7 +5,7 @@
 %%% Created : 15 Sep 2014 by Christophe Romain <christophe.romain@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -30,6 +30,7 @@
 -behaviour(gen_mod).
 
 -export([start/2, stop/1, reload/3, process/2, depends/2,
+         format_arg/2,
 	 mod_options/1, mod_doc/0]).
 
 -include_lib("xmpp/include/xmpp.hrl").
@@ -38,7 +39,7 @@
 -include("ejabberd_stacktrace.hrl").
 -include("translate.hrl").
 
--define(DEFAULT_API_VERSION, 0).
+-define(DEFAULT_API_VERSION, 1000000).
 
 -define(CT_PLAIN,
         {<<"Content-Type">>, <<"text/plain">>}).
@@ -134,7 +135,7 @@ extract_auth(#request{auth = HTTPAuth, ip = {IP, _}, opts = Opts}) ->
 process(_, #request{method = 'POST', data = <<>>}) ->
     ?DEBUG("Bad Request: no data", []),
     badrequest_response(<<"Missing POST data">>);
-process([Call], #request{method = 'POST', data = Data, ip = IPPort} = Req) ->
+process([Call | _], #request{method = 'POST', data = Data, ip = IPPort} = Req) ->
     Version = get_api_version(Req),
     try
         Args = extract_args(Data),
@@ -152,7 +153,7 @@ process([Call], #request{method = 'POST', data = Data, ip = IPPort} = Req) ->
             ?DEBUG("Bad Request: ~p ~p", [_Error, StackTrace]),
             badrequest_response()
     end;
-process([Call], #request{method = 'GET', q = Data, ip = {IP, _}} = Req) ->
+process([Call | _], #request{method = 'GET', q = Data, ip = {IP, _}} = Req) ->
     Version = get_api_version(Req),
     try
         Args = case Data of
@@ -411,7 +412,15 @@ format_command_result(Cmd, Auth, Result, Version) ->
 	    {_, T} = format_result(Result, ResultFormat),
 	    {200, T};
 	_ ->
-	    {200, {[format_result(Result, ResultFormat)]}}
+            OtherResult1 = format_result(Result, ResultFormat),
+            OtherResult2 = case Version of
+                               0 ->
+                                   {[OtherResult1]};
+                               _ ->
+                                   {_, Other3} = OtherResult1,
+                                   Other3
+                           end,
+	    {200, OtherResult2}
     end.
 
 format_result(Atom, {Name, atom}) ->
@@ -524,13 +533,24 @@ mod_options(_) ->
 
 mod_doc() ->
     #{desc =>
-	  [?T("This module provides a ReST API to call ejabberd commands "
-	      "using JSON data."), "",
+	  [?T("This module provides a ReST interface to call "
+              "https://docs.ejabberd.im/developer/ejabberd-api[ejabberd API] "
+	      "commands using JSON data."), "",
 	   ?T("To use this module, in addition to adding it to the 'modules' "
-	      "section, you must also add it to 'request_handlers' of some "
-	      "listener."), "",
+	      "section, you must also enable it in 'listen' -> 'ejabberd_http' -> "
+              "http://../listen-options/#request-handlers[request_handlers]."), "",
 	   ?T("To use a specific API version N, when defining the URL path "
 	      "in the request_handlers, add a 'vN'. "
 	      "For example: '/api/v2: mod_http_api'"), "",
 	   ?T("To run a command, send a POST request to the corresponding "
-	      "URL: 'http://localhost:5280/api/<command_name>'")]}.
+	      "URL: 'http://localhost:5280/api/<command_name>'")],
+     example =>
+         ["listen:",
+          "  -",
+          "    port: 5280",
+          "    module: ejabberd_http",
+          "    request_handlers:",
+          "      /api: mod_http_api",
+          "",
+          "modules:",
+          "  mod_http_api: {}"]}.

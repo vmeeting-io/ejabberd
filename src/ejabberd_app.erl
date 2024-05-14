@@ -5,7 +5,7 @@
 %%% Created : 31 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -103,6 +103,7 @@ prep_stop(State) ->
     ejabberd_sm:stop(),
     ejabberd_service:stop(),
     ejabberd_s2s:stop(),
+    ejabberd_system_monitor:stop(),
     gen_mod:stop(),
     State.
 

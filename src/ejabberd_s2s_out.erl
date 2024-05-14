@@ -2,7 +2,7 @@
 %%% Created : 16 Dec 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -318,7 +318,6 @@ handle_info(Info, #{server_host := ServerHost} = State) ->
 
 terminate(Reason, #{server := LServer,
 		    remote_server := RServer} = State) ->
-    ejabberd_s2s:remove_connection({LServer, RServer}, self()),
     State1 = case Reason of
 		 normal -> State;
 		 _ -> State#{stop_reason => internal_failure}
@@ -351,29 +350,27 @@ bounce_queue(State) ->
       end, State).
 
 -spec bounce_message_queue({binary(), binary()}, state()) -> state().
-bounce_message_queue({LServer, RServer} = FromTo, State) ->
-    Pids = ejabberd_s2s:get_connections_pids(FromTo),
-    case lists:member(self(), Pids) of
-	true ->
-	    ?WARNING_MSG("Outgoing s2s connection ~ts -> ~ts is supposed "
-			 "to be unregistered, but pid ~p still presents "
-			 "in 's2s' table", [LServer, RServer, self()]),
-	    State;
-	false ->
-	    receive {route, Pkt} ->
-		    State1 = bounce_packet(Pkt, State),
-		    bounce_message_queue(FromTo, State1)
-	    after 0 ->
-		    State
-	    end
+bounce_message_queue(FromTo, State) ->
+    receive {route, Pkt} ->
+	    State1 = bounce_packet(Pkt, State),
+	    bounce_message_queue(FromTo, State1)
+    after 0 ->
+	    State
     end.
 
 -spec bounce_packet(xmpp_element(), state()) -> state().
 bounce_packet(Pkt, State) when ?is_stanza(Pkt) ->
-    Lang = xmpp:get_lang(Pkt),
-    Err = mk_bounce_error(Lang, State),
-    ejabberd_router:route_error(Pkt, Err),
-    State;
+    #{server_host := Host} = State,
+    case ejabberd_hooks:run_fold(
+           s2s_out_bounce_packet, Host, State, [Pkt]) of
+        ignore ->
+            State;
+        State2 ->
+            Lang = xmpp:get_lang(Pkt),
+            Err = mk_bounce_error(Lang, State2),
+            ejabberd_router:route_error(Pkt, Err),
+            State2
+    end;
 bounce_packet(_, State) ->
     State.
 

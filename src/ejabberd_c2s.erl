@@ -2,7 +2,7 @@
 %%% Created :  8 Dec 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -22,6 +22,10 @@
 -module(ejabberd_c2s).
 -behaviour(xmpp_stream_in).
 -behaviour(ejabberd_listener).
+
+-protocol({rfc, 3920}).
+-protocol({rfc, 3921}).
+-protocol({rfc, 6120}).
 -protocol({rfc, 6121}).
 
 %% ejabberd_listener callbacks
@@ -36,7 +40,10 @@
 	 handle_stream_start/2, handle_stream_end/2,
 	 handle_unauthenticated_packet/2, handle_authenticated_packet/2,
 	 handle_auth_success/4, handle_auth_failure/4, handle_send/3,
-	 handle_recv/3, handle_cdata/2, handle_unbinded_packet/2]).
+	 handle_recv/3, handle_cdata/2, handle_unbinded_packet/2,
+	 inline_stream_features/1, handle_sasl2_inline/2,
+	 handle_sasl2_inline_post/3, handle_bind2_inline/2,
+	 handle_bind2_inline_post/3, sasl_options/1]).
 %% Hooks
 -export([handle_unexpected_cast/2, handle_unexpected_call/3,
 	 process_auth_result/3, reject_unauthenticated_packet/2,
@@ -208,7 +215,12 @@ open_session(#{user := U, server := S, resource := R,
 	       Pres -> get_priority_from_presence(Pres)
 	   end,
     Info = [{ip, IP}, {conn, Conn}, {auth_module, AuthModule}],
-    ejabberd_sm:open_session(SID, U, S, R, Prio, Info),
+    case State of
+	#{bind2_session_id := Tag} ->
+	    ejabberd_sm:open_session(SID, U, S, R, Prio, Info, Tag);
+	_ ->
+	    ejabberd_sm:open_session(SID, U, S, R, Prio, Info)
+    end,
     xmpp_stream_in:establish(State2).
 
 %%%===================================================================
@@ -285,12 +297,14 @@ process_closed(State, Reason) ->
     stop_async(self()),
     State#{stop_reason => Reason}.
 
-process_terminated(#{sid := SID, socket := Socket,
-		     jid := JID, user := U, server := S, resource := R} = State,
+process_terminated(#{sid := SID, jid := JID, user := U, server := S, resource := R} = State,
 		   Reason) ->
     Status = format_reason(State, Reason),
     ?INFO_MSG("(~ts) Closing c2s session for ~ts: ~ts",
-	      [xmpp_socket:pp(Socket), jid:encode(JID), Status]),
+	      [case maps:find(socket, State) of
+		   {ok, Socket} -> xmpp_socket:pp(Socket);
+		   _ -> <<"unknown">>
+	       end, jid:encode(JID), Status]),
     Pres = #presence{type = unavailable,
 		     from = JID,
 		     to = jid:remove_resource(JID)},
@@ -305,10 +319,12 @@ process_terminated(#{sid := SID, socket := Socket,
 	     end,
     bounce_message_queue(SID, JID),
     State1;
-process_terminated(#{socket := Socket,
-		     stop_reason := {tls, _}} = State, Reason) ->
+process_terminated(#{stop_reason := {tls, _}} = State, Reason) ->
     ?WARNING_MSG("(~ts) Failed to secure c2s connection: ~ts",
-		 [xmpp_socket:pp(Socket), format_reason(State, Reason)]),
+		 [case maps:find(socket, State) of
+		      {ok, Socket} -> xmpp_socket:pp(Socket);
+		      _ -> <<"unknown">>
+		  end, format_reason(State, Reason)]),
     State;
 process_terminated(State, _Reason) ->
     State.
@@ -373,6 +389,9 @@ unauthenticated_stream_features(#{lserver := LServer}) ->
 authenticated_stream_features(#{lserver := LServer}) ->
     ejabberd_hooks:run_fold(c2s_post_auth_features, LServer, [], [LServer]).
 
+inline_stream_features(#{lserver := LServer}) ->
+    ejabberd_hooks:run_fold(c2s_inline_features, LServer, {[], []}, [LServer]).
+
 sasl_mechanisms(Mechs, #{lserver := LServer, stream_encrypted := Encrypted} = State) ->
     Type = ejabberd_auth:store_type(LServer),
     Mechs1 = ejabberd_option:disable_sasl_mechanisms(LServer),
@@ -398,6 +417,12 @@ sasl_mechanisms(Mechs, #{lserver := LServer, stream_encrypted := Encrypted} = St
 	 (<<"EXTERNAL">>) -> maps:get(tls_verify, State, false);
 	 (_) -> false
       end, Mechs -- Mechs1).
+
+sasl_options(#{lserver := LServer}) ->
+    case ejabberd_option:disable_sasl_scram_downgrade_protection(LServer) of
+	true -> [{scram_downgrade_protection, false}];
+	_ -> []
+    end.
 
 get_password_fun(_Mech, #{lserver := LServer}) ->
     fun(U) ->
@@ -524,6 +549,22 @@ handle_authenticated_packet(Pkt, #{lserver := LServer, jid := JID,
 handle_cdata(Data, #{lserver := LServer} = State) ->
     ejabberd_hooks:run_fold(c2s_handle_cdata, LServer,
 			    State, [Data]).
+
+handle_sasl2_inline(Els, #{lserver := LServer} = State) ->
+    ejabberd_hooks:run_fold(c2s_handle_sasl2_inline, LServer,
+			    {State, Els, []}, []).
+
+handle_sasl2_inline_post(Els, Results, #{lserver := LServer} = State) ->
+    ejabberd_hooks:run_fold(c2s_handle_sasl2_inline_post, LServer,
+			    State, [Els, Results]).
+
+handle_bind2_inline(Els, #{lserver := LServer} = State) ->
+    ejabberd_hooks:run_fold(c2s_handle_bind2_inline, LServer,
+			    {State, Els, []}, []).
+
+handle_bind2_inline_post(Els, Results, #{lserver := LServer} = State) ->
+    ejabberd_hooks:run_fold(c2s_handle_bind2_inline_post, LServer,
+			    State, [Els, Results]).
 
 handle_recv(El, Pkt, #{lserver := LServer} = State) ->
     ejabberd_hooks:run_fold(c2s_handle_recv, LServer, State, [El, Pkt]).
@@ -773,9 +814,9 @@ broadcast_presence_unavailable(#{jid := JID, pres_a := PresA} = State, Pres,
 		    Roster = ejabberd_hooks:run_fold(roster_get, LServer,
 						     [], [{LUser, LServer}]),
 		    lists:foldl(
-			fun(#roster{jid = LJID, subscription = Sub}, Acc)
+			fun(#roster_item{jid = ItemJID, subscription = Sub}, Acc)
 			       when Sub == both; Sub == from ->
-			    maps:put(LJID, 1, Acc);
+			    maps:put(jid:tolower(ItemJID), 1, Acc);
 			   (_, Acc) ->
 			       Acc
 			end, #{BareJID => 1}, Roster);
@@ -809,8 +850,7 @@ broadcast_presence_available(#{jid := JID} = State,
 				    [], [{LUser, LServer}]),
     {FJIDs, TJIDs} =
 	lists:foldl(
-	  fun(#roster{jid = LJID, subscription = Sub}, {F, T}) ->
-		  To = jid:make(LJID),
+	  fun(#roster_item{jid = To, subscription = Sub}, {F, T}) ->
 		  F1 = if Sub == both orelse Sub == from ->
 			       Pres1 = xmpp:set_to(Pres, To),
 			       case privacy_check_packet(State, Pres1, out) of
@@ -839,10 +879,9 @@ broadcast_presence_available(#{jid := JID} = State,
     Items = ejabberd_hooks:run_fold(
 	      roster_get, LServer, [], [{LUser, LServer}]),
     JIDs = lists:foldl(
-	     fun(#roster{jid = LJID, subscription = Sub}, Tos)
+	     fun(#roster_item{jid = To, subscription = Sub}, Tos)
 		   when Sub == both orelse Sub == from ->
-		     To = jid:make(LJID),
-		     P = xmpp:set_to(Pres, jid:make(LJID)),
+		     P = xmpp:set_to(Pres, To),
 		     case privacy_check_packet(State, P, out) of
 			 allow -> [To|Tos];
 			 deny -> Tos
@@ -880,7 +919,7 @@ get_priority_from_presence(#presence{priority = Prio}) ->
 -spec route_multiple(state(), [jid()], stanza()) -> ok.
 route_multiple(#{lserver := LServer}, JIDs, Pkt) ->
     From = xmpp:get_from(Pkt),
-    ejabberd_router_multicast:route_multicast(From, LServer, JIDs, Pkt).
+    ejabberd_router_multicast:route_multicast(From, LServer, JIDs, Pkt, false).
 
 get_subscription(#jid{luser = LUser, lserver = LServer}, JID) ->
     {Subscription, _, _} = ejabberd_hooks:run_fold(

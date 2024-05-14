@@ -2,7 +2,7 @@
 %%% File    : ejabberd_doc.erl
 %%% Purpose : Options documentation generator
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -48,7 +48,10 @@ man(Lang) ->
                                   {[{M, Descr, DocOpts, #{example => Example}}|Mods], SubMods};
                               #{opts := DocOpts} ->
                                   {ParentMod, Backend} = strip_backend_suffix(M),
-                                  {Mods, dict:append(ParentMod, {M, Backend, DocOpts}, SubMods)}
+                                  {Mods, dict:append(ParentMod, {M, Backend, DocOpts}, SubMods)};
+                              #{} ->
+                                  warn("module ~s is not properly documented", [M]),
+                                  Acc
                           catch _:undef ->
                                   case erlang:function_exported(
                                          M, mod_options, 1) of
@@ -69,11 +72,10 @@ man(Lang) ->
                     catch _:undef -> []
                     end
             end, ejabberd_config:callback_modules(all)),
-    Version = binary_to_list(ejabberd_option:version()),
     Options =
         ["TOP LEVEL OPTIONS",
          "-----------------",
-	 "This section describes top level options of ejabberd "++Version,
+         tr(Lang, ?T("This section describes top level options of ejabberd.")),
          io_lib:nl()] ++
         lists:flatmap(
           fun(Opt) ->
@@ -93,7 +95,7 @@ man(Lang) ->
          "MODULES",
          "-------",
          "[[modules]]",
-         "This section describes options of all modules in ejabberd "++Version,
+         tr(Lang, ?T("This section describes options of all ejabberd modules.")),
          io_lib:nl()] ++
         lists:flatmap(
           fun({M, Descr, DocOpts, Backends, Example}) ->
@@ -112,7 +114,7 @@ man(Lang) ->
          "LISTENERS",
          "-------",
          "[[listeners]]",
-         "This section describes options of all listeners in ejabberd "++Version,
+         tr(Lang, ?T("This section describes options of all ejabberd listeners.")),
          io_lib:nl(),
          "TODO"],
     AsciiData =
@@ -160,6 +162,10 @@ opt_to_man(Lang, {Option, Options, Children}, Level) ->
                          lists:keysort(1, Children))]) ++
         [io_lib:nl()|format_example(Level, Lang, Options)].
 
+format_option(Lang, Option, #{note := Note, value := Val}) ->
+    "\n\n_Note_ about the next option: " ++ Note ++ ":\n\n"++
+    "*" ++ atom_to_list(Option) ++ "*: 'pass:[" ++
+        tr(Lang, Val) ++ "]'::";
 format_option(Lang, Option, #{value := Val}) ->
     "*" ++ atom_to_list(Option) ++ "*: 'pass:[" ++
         tr(Lang, Val) ++ "]'::";
@@ -228,9 +234,9 @@ man_header(Lang) ->
                  "indentation, or otherwise you will get pretty cryptic "
                  "configuration errors.")),
      io_lib:nl(),
-     tr(Lang, ?T("Logically, configuration options are splitted into 3 main categories: "
+     tr(Lang, ?T("Logically, configuration options are split into 3 main categories: "
                  "'Modules', 'Listeners' and everything else called 'Top Level' options. "
-                 "Thus this document is splitted into 3 main chapters describing each "
+                 "Thus this document is split into 3 main chapters describing each "
                  "category separately. So, the contents of ejabberd.yml will typically "
                  "look like this:")),
      io_lib:nl(),

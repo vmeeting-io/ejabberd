@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," הגדיר/ה את הנושא אל: "}.
 {"A friendly name for the node","שם ידידותי עבור הצומת"}.
 {"A password is required to enter this room","נדרשת סיסמה כדי להיכנס אל חדר זה"}.
@@ -144,7 +148,6 @@
 {"It is not allowed to send error messages to the room. The participant (~s) has sent an error message (~s) and got kicked from the room","אין זה מותר לשלוח הודעות שגיאה לחדר. משתתף זה (~s) שלח הודעת שגיאה (~s) ונבעט מתוך החדר"}.
 {"It is not allowed to send private messages of type \"groupchat\"","אין זה מותר לשלוח הודעות פרטיות מן טיפוס \"groupchat\""}.
 {"It is not allowed to send private messages to the conference","אין זה מותר לשלוח הודעות פרטיות לועידה"}.
-{"It is not allowed to send private messages","אין זה מותר לשלוח הודעות פרטיות"}.
 {"Jabber ID","מזהה Jabber"}.
 {"January","ינואר"}.
 {"joins the room","נכנס/ת אל החדר"}.
@@ -166,7 +169,6 @@
 {"Make room public searchable","הפוך חדר לחדר שנתון לחיפוש פומבי"}.
 {"Malformed username","שם משתמש פגום"}.
 {"March","מרץ"}.
-{"Max # of items to persist","מספר מרבי של פריטים לקיבוע"}.
 {"Max payload size in bytes","גודל מרבי של מטען ייעוד (payload) ביחידות מידה של byte"}.
 {"Maximum Number of Occupants","מספר מרבי של נוכחים"}.
 {"May","מאי"}.
@@ -334,7 +336,6 @@
 {"The collections with which a node is affiliated","האוספים עמם צומת מסונף"}.
 {"The password is too weak","הסיסמה חלשה מדי"}.
 {"the password is","הסיסמה היא"}.
-{"The type of node data, usually specified by the namespace of the payload (if any)","סוג מידע ממסר, לרוב מצוין לפי מרחב־שמות של מטען הייעוד (אם בכלל)"}.
 {"There was an error creating the account: ","אירעה שגיאה ביצירת החשבון: "}.
 {"There was an error deleting the account: ","אירעה שגיאה במחיקת החשבון: "}.
 {"This room is not anonymous","חדר זה אינו אנונימי"}.

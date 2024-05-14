@@ -5,7 +5,7 @@
 %%% Created : 15 Jul 2017 by Holger Weiss <holger@zedat.fu-berlin.de>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2017-2021 ProcessOne
+%%% ejabberd, Copyright (C) 2017-2024 ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -32,8 +32,9 @@
 -export([start/2, stop/1, reload/3, mod_opt_type/1, mod_options/1, depends/2]).
 -export([mod_doc/0]).
 %% ejabberd_hooks callbacks.
--export([c2s_session_pending/1, c2s_session_resumed/1, c2s_copy_session/2,
-	 c2s_handle_cast/2, c2s_handle_info/2, c2s_stanza/3]).
+-export([ejabberd_started/0, c2s_session_pending/1, c2s_session_resumed/1,
+	 c2s_copy_session/2, c2s_handle_cast/2, c2s_handle_info/2,
+	 c2s_stanza/3]).
 
 -include("logger.hrl").
 -include_lib("xmpp/include/xmpp.hrl").
@@ -47,13 +48,7 @@
 %% gen_mod callbacks.
 %%--------------------------------------------------------------------
 -spec start(binary(), gen_mod:opts()) -> ok.
-start(Host, Opts) ->
-    case mod_push_keepalive_opt:wake_on_start(Opts) of
-	true ->
-	    wake_all(Host);
-	false ->
-	    ok
-    end,
+start(Host, _Opts) ->
     register_hooks(Host).
 
 -spec stop(binary()) -> ok.
@@ -61,14 +56,8 @@ stop(Host) ->
     unregister_hooks(Host).
 
 -spec reload(binary(), gen_mod:opts(), gen_mod:opts()) -> ok.
-reload(Host, NewOpts, OldOpts) ->
-    case {mod_push_keepalive_opt:wake_on_start(NewOpts),
-	  mod_push_keepalive_opt:wake_on_start(OldOpts)} of
-	{true, false} ->
-	    wake_all(Host);
-	_ ->
-	    ok
-    end.
+reload(_Host, _NewOpts, _OldOpts) ->
+    ok.
 
 -spec depends(binary(), gen_mod:opts()) -> [{module(), hard | soft}].
 depends(_Host, _Opts) ->
@@ -87,20 +76,20 @@ mod_opt_type(wake_on_timeout) ->
     econf:bool().
 
 mod_options(_Host) ->
-    [{resume_timeout, timer:seconds(259200)},
+    [{resume_timeout, timer:hours(72)},
      {wake_on_start, false},
      {wake_on_timeout, true}].
 
 mod_doc() ->
     #{desc =>
           [?T("This module tries to keep the stream management "
-              "session (see 'mod_stream_mgmt') of a disconnected "
+              "session (see _`mod_stream_mgmt`_) of a disconnected "
               "mobile client alive if the client enabled push "
               "notifications for that session. However, the normal "
               "session resumption timeout is restored once a push "
               "notification is issued, so the session will be closed "
               "if the client doesn't respond to push notifications."), "",
-           ?T("The module depends on 'mod_push'.")],
+           ?T("The module depends on _`mod_push`_.")],
       opts =>
           [{resume_timeout,
             #{value => "timeout()",
@@ -109,9 +98,9 @@ mod_doc() ->
                      "the session of a disconnected push client times out. "
                      "This timeout is only in effect as long as no push "
                      "notification is issued. Once that happened, the "
-                     "resumption timeout configured for the 'mod_stream_mgmt' "
-                     "module is restored. "
-                     "The default value is '72' minutes.")}},
+                     "resumption timeout configured for _`mod_stream_mgmt`_ "
+                     "is restored. "
+                     "The default value is '72' hours.")}},
            {wake_on_start,
             #{value => "true | false",
               desc =>
@@ -146,7 +135,10 @@ register_hooks(Host) ->
     ejabberd_hooks:add(c2s_handle_info, Host, ?MODULE,
 		       c2s_handle_info, 50),
     ejabberd_hooks:add(c2s_handle_send, Host, ?MODULE,
-		       c2s_stanza, 50).
+		       c2s_stanza, 50),
+    % Wait for ejabberd_pkix before running our ejabberd_started/0, so that we
+    % don't initiate s2s connections before certificates are loaded:
+    ejabberd_hooks:add(ejabberd_started, ?MODULE, ejabberd_started, 90).
 
 -spec unregister_hooks(binary()) -> ok.
 unregister_hooks(Host) ->
@@ -161,7 +153,14 @@ unregister_hooks(Host) ->
     ejabberd_hooks:delete(c2s_handle_info, Host, ?MODULE,
 			  c2s_handle_info, 50),
     ejabberd_hooks:delete(c2s_handle_send, Host, ?MODULE,
-			  c2s_stanza, 50).
+			  c2s_stanza, 50),
+    case gen_mod:is_loaded_elsewhere(Host, ?MODULE) of
+	false ->
+	    ejabberd_hooks:delete(
+	      ejabberd_started, ?MODULE, ejabberd_started, 90);
+	true ->
+	    ok
+    end.
 
 %%--------------------------------------------------------------------
 %% Hook callbacks.
@@ -213,7 +212,7 @@ c2s_copy_session(State, _) ->
     State.
 
 -spec c2s_handle_cast(c2s_state(), any()) -> c2s_state().
-c2s_handle_cast(#{lserver := LServer} = State, push_enable) ->
+c2s_handle_cast(#{lserver := LServer} = State, {push_enable, _ID}) ->
     ResumeTimeout = mod_push_keepalive_opt:resume_timeout(LServer),
     WakeOnTimeout = mod_push_keepalive_opt:wake_on_timeout(LServer),
     State#{push_resume_timeout => ResumeTimeout,
@@ -232,6 +231,15 @@ c2s_handle_info(#{push_enabled := true, mgmt_state := pending,
     {stop, State};
 c2s_handle_info(State, _) ->
     State.
+
+-spec ejabberd_started() -> ok.
+ejabberd_started() ->
+    Pred = fun(Host) ->
+		   gen_mod:is_loaded(Host, ?MODULE) andalso
+		       mod_push_keepalive_opt:wake_on_start(Host)
+	   end,
+    [wake_all(Host) || Host <- ejabberd_config:get_option(hosts), Pred(Host)],
+    ok.
 
 %%--------------------------------------------------------------------
 %% Internal functions.

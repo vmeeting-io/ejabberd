@@ -5,7 +5,7 @@
 %%% Created : 21 Jul 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -73,32 +73,15 @@ start(Host, Opts) ->
     Mod = gen_mod:db_mod(Opts, ?MODULE),
     Mod:init(Host, Opts),
     init_cache(Mod, Host, Opts),
-    ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
-		       disco_features, 50),
-    ejabberd_hooks:add(c2s_copy_session, Host, ?MODULE,
-		       c2s_copy_session, 50),
-    ejabberd_hooks:add(user_send_packet, Host, ?MODULE,
-		       user_send_packet, 50),
-    ejabberd_hooks:add(privacy_check_packet, Host, ?MODULE,
-		       check_packet, 50),
-    ejabberd_hooks:add(remove_user, Host, ?MODULE,
-		       remove_user, 50),
-    gen_iq_handler:add_iq_handler(ejabberd_sm, Host,
-				  ?NS_PRIVACY, ?MODULE, process_iq).
+    {ok, [{hook, disco_local_features, disco_features, 50},
+          {hook, c2s_copy_session, c2s_copy_session, 50},
+          {hook, user_send_packet, user_send_packet, 50},
+          {hook, privacy_check_packet, check_packet, 50},
+          {hook, remove_user, remove_user, 50},
+          {iq_handler, ejabberd_sm, ?NS_PRIVACY, process_iq}]}.
 
-stop(Host) ->
-    ejabberd_hooks:delete(disco_local_features, Host, ?MODULE,
-			  disco_features, 50),
-    ejabberd_hooks:delete(c2s_copy_session, Host, ?MODULE,
-			  c2s_copy_session, 50),
-    ejabberd_hooks:delete(user_send_packet, Host, ?MODULE,
-			  user_send_packet, 50),
-    ejabberd_hooks:delete(privacy_check_packet, Host,
-			  ?MODULE, check_packet, 50),
-    ejabberd_hooks:delete(remove_user, Host, ?MODULE,
-			  remove_user, 50),
-    gen_iq_handler:remove_iq_handler(ejabberd_sm, Host,
-				     ?NS_PRIVACY).
+stop(_Host) ->
+    ok.
 
 reload(Host, NewOpts, OldOpts) ->
     NewMod = gen_mod:db_mod(NewOpts, ?MODULE),
@@ -607,34 +590,28 @@ do_check_packet(#jid{luser = LUser, lserver = LServer}, List, Packet, Dir) ->
 		   in -> jid:tolower(From);
 		   out -> jid:tolower(To)
 		 end,
-	  {Subscription, _Ask, Groups} = ejabberd_hooks:run_fold(
-					   roster_get_jid_info, LServer,
-					   {none, none, []},
-					   [LUser, LServer, LJID]),
-	  check_packet_aux(List, PType2, LJID, Subscription, Groups)
+	  check_packet_aux(List, PType2, LJID, [LUser, LServer])
     end.
 
 -spec check_packet_aux([listitem()],
 		       message | iq | presence_in | presence_out | other,
-		       ljid(), none | both | from | to, [binary()]) ->
+		       ljid(), [binary()] | {none | both | from | to, [binary()]}) ->
 			      allow | deny.
 %% Ptype = message | iq | presence_in | presence_out | other
-check_packet_aux([], _PType, _JID, _Subscription,
-		 _Groups) ->
+check_packet_aux([], _PType, _JID, _RosterInfo) ->
     allow;
-check_packet_aux([Item | List], PType, JID,
-		 Subscription, Groups) ->
+check_packet_aux([Item | List], PType, JID, RosterInfo) ->
     #listitem{type = Type, value = Value, action = Action} =
 	Item,
     case is_ptype_match(Item, PType) of
       true ->
-	    case is_type_match(Type, Value, JID, Subscription, Groups) of
-		true -> Action;
-		false ->
-		    check_packet_aux(List, PType, JID, Subscription, Groups)
+	    case is_type_match(Type, Value, JID, RosterInfo) of
+		{true, _} -> Action;
+		{false, RI} ->
+		    check_packet_aux(List, PType, JID, RI)
 	    end;
       false ->
-	  check_packet_aux(List, PType, JID, Subscription, Groups)
+	  check_packet_aux(List, PType, JID, RosterInfo)
     end.
 
 -spec is_ptype_match(listitem(),
@@ -654,32 +631,47 @@ is_ptype_match(Item, PType) ->
     end.
 
 -spec is_type_match(none | jid | subscription | group, listitem_value(),
-		    ljid(), none | both | from | to, [binary()]) -> boolean().
-is_type_match(none, _Value, _JID, _Subscription, _Groups) ->
-    true;
-is_type_match(jid, Value, JID, _Subscription, _Groups) ->
+		    ljid(), [binary()] | {none | both | from | to, [binary()]}) ->
+    {boolean(), [binary()] | {none | both | from | to, [binary()]}}.
+is_type_match(none, _Value, _JID, RosterInfo) ->
+    {true, RosterInfo};
+is_type_match(jid, Value, JID, RosterInfo) ->
     case Value of
 	{<<"">>, Server, <<"">>} ->
 	    case JID of
-		{_, Server, _} -> true;
-		_ -> false
+		{_, Server, _} -> {true, RosterInfo};
+		_ -> {false, RosterInfo}
 	    end;
 	{User, Server, <<"">>} ->
 	    case JID of
-		{User, Server, _} -> true;
-		_ -> false
+		{User, Server, _} -> {true, RosterInfo};
+		_ -> {false, RosterInfo}
 	    end;
 	{<<"">>, Server, Resource} ->
 	    case JID of
-		{_, Server, Resource} -> true;
-		_ -> false
+		{_, Server, Resource} -> {true, RosterInfo};
+		_ -> {false, RosterInfo}
 	    end;
-	_ -> Value == JID
+	_ -> {Value == JID, RosterInfo}
     end;
-is_type_match(subscription, Value, _JID, Subscription, _Groups) ->
-    Value == Subscription;
-is_type_match(group, Group, _JID, _Subscription, Groups) ->
-    lists:member(Group, Groups).
+is_type_match(subscription, Value, JID, RosterInfo) ->
+    {Subscription, _} = RI = resolve_roster_info(JID, RosterInfo),
+    {Value == Subscription, RI};
+is_type_match(group, Group, JID, RosterInfo) ->
+    {_, Groups} = RI = resolve_roster_info(JID, RosterInfo),
+    {lists:member(Group, Groups), RI}.
+
+-spec resolve_roster_info(ljid(), [binary()] | {none | both | from | to, [binary()]}) ->
+    {none | both | from | to, [binary()]}.
+resolve_roster_info(JID, [LUser, LServer]) ->
+    {Subscription, _Ask, Groups} =
+    ejabberd_hooks:run_fold(
+	roster_get_jid_info, LServer,
+	{none, none, []},
+	[LUser, LServer, JID]),
+    {Subscription, Groups};
+resolve_roster_info(_, RosterInfo) ->
+    RosterInfo.
 
 -spec remove_user(binary(), binary()) -> ok.
 remove_user(User, Server) ->
@@ -878,25 +870,25 @@ mod_doc() ->
               "https://xmpp.org/extensions/xep-0191.html"
               "[XEP-0191: Blocking Command] which is implemented by "
               "'mod_blocking' module. However, you still need "
-              "'mod_privacy' loaded in order for 'mod_blocking' to work.")],
+              "'mod_privacy' loaded in order for _`mod_blocking`_ to work.")],
       opts =>
           [{db_type,
             #{value => "mnesia | sql",
               desc =>
-                  ?T("Same as top-level 'default_db' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`default_db`_ option, but applied to this module only.")}},
            {use_cache,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'use_cache' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`use_cache`_ option, but applied to this module only.")}},
            {cache_size,
             #{value => "pos_integer() | infinity",
               desc =>
-                  ?T("Same as top-level 'cache_size' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_size`_ option, but applied to this module only.")}},
            {cache_missed,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'cache_missed' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_missed`_ option, but applied to this module only.")}},
            {cache_life_time,
             #{value => "timeout()",
               desc =>
-                  ?T("Same as top-level 'cache_life_time' option, but applied to this module only.")}}]}.
+                  ?T("Same as top-level _`cache_life_time`_ option, but applied to this module only.")}}]}.

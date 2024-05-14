@@ -4,7 +4,7 @@
 %%% Created : 15 Apr 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -30,7 +30,8 @@
 -export([init/2, store_message/1, pop_messages/2, remove_expired_messages/1,
 	 remove_old_messages/2, remove_user/2, read_message_headers/2,
 	 read_message/3, remove_message/3, read_all_messages/2,
-	 remove_all_messages/2, count_messages/2, import/1, export/1]).
+	 remove_all_messages/2, count_messages/2, import/1, export/1, remove_old_messages_batch/3]).
+-export([sql_schemas/0]).
 
 -include_lib("xmpp/include/xmpp.hrl").
 -include("mod_offline.hrl").
@@ -40,8 +41,27 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-init(_Host, _Opts) ->
+init(Host, _Opts) ->
+    ejabberd_sql_schema:update_schema(Host, ?MODULE, sql_schemas()),
     ok.
+
+sql_schemas() ->
+    [#sql_schema{
+        version = 1,
+        tables =
+            [#sql_table{
+                name = <<"spool">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"xml">>, type = {text, big}},
+                     #sql_column{name = <<"seq">>, type = bigserial},
+                     #sql_column{name = <<"created_at">>, type = timestamp,
+                                 default = true}],
+                indices = [#sql_index{
+                              columns = [<<"server_host">>, <<"username">>]},
+                           #sql_index{
+                              columns = [<<"created_at">>]}]}]}].
 
 store_message(#offline_msg{us = {LUser, LServer}} = M) ->
     From = M#offline_msg.from,
@@ -111,6 +131,31 @@ remove_old_messages(Days, LServer) ->
 	    ?ERROR_MSG("Cannot delete message in offline spool: ~p", [_Error])
     end,
     {atomic, ok}.
+
+remove_old_messages_batch(LServer, Days, Batch) ->
+    case ejabberd_sql:sql_query(
+	LServer,
+	fun(pgsql, _) ->
+	    ejabberd_sql:sql_query_t(
+		?SQL("DELETE FROM spool"
+		     " WHERE created_at <"
+		     " NOW() - %(Days)d * INTERVAL '1 DAY' LIMIT %(Batch)d"));
+	   (sqlite, _) ->
+	       ejabberd_sql:sql_query_t(
+		   ?SQL("DELETE FROM spool"
+			" WHERE created_at <"
+			" DATETIME('now', '-%(Days)d days') LIMIT %(Batch)d"));
+	   (_, _) ->
+	       ejabberd_sql:sql_query_t(
+		   ?SQL("DELETE FROM spool"
+			" WHERE created_at < NOW() - INTERVAL %(Days)d DAY LIMIT %(Batch)d"))
+	end)
+    of
+	{updated, N} ->
+	    {ok, N};
+	Error ->
+	    {error, Error}
+    end.
 
 remove_user(LUser, LServer) ->
     ejabberd_sql:sql_query(

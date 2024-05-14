@@ -5,7 +5,7 @@
 %%% Created : 19 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -44,50 +44,20 @@
 -include("translate.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
 
-start(Host, _Opts) ->
-    ejabberd_hooks:add(disco_local_items, Host, ?MODULE,
-		       get_local_items, 50),
-    ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
-		       get_local_features, 50),
-    ejabberd_hooks:add(disco_local_identity, Host, ?MODULE,
-		       get_local_identity, 50),
-    ejabberd_hooks:add(disco_sm_items, Host, ?MODULE,
-		       get_sm_items, 50),
-    ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
-		       get_sm_features, 50),
-    ejabberd_hooks:add(disco_sm_identity, Host, ?MODULE,
-		       get_sm_identity, 50),
-    ejabberd_hooks:add(adhoc_local_items, Host, ?MODULE,
-		       adhoc_local_items, 50),
-    ejabberd_hooks:add(adhoc_local_commands, Host, ?MODULE,
-		       adhoc_local_commands, 50),
-    ejabberd_hooks:add(adhoc_sm_items, Host, ?MODULE,
-		       adhoc_sm_items, 50),
-    ejabberd_hooks:add(adhoc_sm_commands, Host, ?MODULE,
-		       adhoc_sm_commands, 50),
-    ok.
+start(_Host, _Opts) ->
+    {ok, [{hook, disco_local_items, get_local_items, 50},
+          {hook, disco_local_features, get_local_features, 50},
+          {hook, disco_local_identity, get_local_identity, 50},
+          {hook, disco_sm_items, get_sm_items, 50},
+          {hook, disco_sm_features, get_sm_features, 50},
+          {hook, disco_sm_identity, get_sm_identity, 50},
+          {hook, adhoc_local_items, adhoc_local_items, 50},
+          {hook, adhoc_local_commands, adhoc_local_commands, 50},
+          {hook, adhoc_sm_items, adhoc_sm_items, 50},
+          {hook, adhoc_sm_commands, adhoc_sm_commands, 50}]}.
 
-stop(Host) ->
-    ejabberd_hooks:delete(adhoc_sm_commands, Host, ?MODULE,
-			  adhoc_sm_commands, 50),
-    ejabberd_hooks:delete(adhoc_sm_items, Host, ?MODULE,
-			  adhoc_sm_items, 50),
-    ejabberd_hooks:delete(adhoc_local_commands, Host,
-			  ?MODULE, adhoc_local_commands, 50),
-    ejabberd_hooks:delete(adhoc_local_items, Host, ?MODULE,
-			  adhoc_local_items, 50),
-    ejabberd_hooks:delete(disco_sm_identity, Host, ?MODULE,
-			  get_sm_identity, 50),
-    ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
-			  get_sm_features, 50),
-    ejabberd_hooks:delete(disco_sm_items, Host, ?MODULE,
-			  get_sm_items, 50),
-    ejabberd_hooks:delete(disco_local_identity, Host,
-			  ?MODULE, get_local_identity, 50),
-    ejabberd_hooks:delete(disco_local_features, Host,
-			  ?MODULE, get_local_features, 50),
-    ejabberd_hooks:delete(disco_local_items, Host, ?MODULE,
-			  get_local_items, 50).
+stop(_Host) ->
+    ok.
 
 reload(_Host, _NewOpts, _OldOpts) ->
     ok.
@@ -171,9 +141,14 @@ get_local_identity(Acc, _From, _To, Node, Lang) ->
 	  ?INFO_COMMAND(?T("Get User Last Login Time"), Lang);
       ?NS_ADMINL(<<"user-stats">>) ->
 	  ?INFO_COMMAND(?T("Get User Statistics"), Lang);
+      ?NS_ADMINL(<<"get-registered-users-list">>) ->
+	  ?INFO_COMMAND(?T("Get List of Registered Users"),
+			Lang);
       ?NS_ADMINL(<<"get-registered-users-num">>) ->
 	  ?INFO_COMMAND(?T("Get Number of Registered Users"),
 			Lang);
+      ?NS_ADMINL(<<"get-online-users-list">>) ->
+	  ?INFO_COMMAND(?T("Get List of Online Users"), Lang);
       ?NS_ADMINL(<<"get-online-users-num">>) ->
 	  ?INFO_COMMAND(?T("Get Number of Online Users"), Lang);
       _ -> Acc
@@ -252,7 +227,11 @@ get_local_features(Acc, From,
 		?INFO_RESULT(Allow, [?NS_COMMANDS], Lang);
 	    ?NS_ADMINL(<<"user-stats">>) ->
 		?INFO_RESULT(Allow, [?NS_COMMANDS], Lang);
+	    ?NS_ADMINL(<<"get-registered-users-list">>) ->
+		?INFO_RESULT(Allow, [?NS_COMMANDS], Lang);
 	    ?NS_ADMINL(<<"get-registered-users-num">>) ->
+		?INFO_RESULT(Allow, [?NS_COMMANDS], Lang);
+	    ?NS_ADMINL(<<"get-online-users-list">>) ->
 		?INFO_RESULT(Allow, [?NS_COMMANDS], Lang);
 	    ?NS_ADMINL(<<"get-online-users-num">>) ->
 		?INFO_RESULT(Allow, [?NS_COMMANDS], Lang);
@@ -476,7 +455,11 @@ get_local_items(Acc, From, #jid{lserver = LServer} = To,
 		?ITEMS_RESULT(Allow, LNode, {error, Err});
 	    ?NS_ADMINL(<<"user-stats">>) ->
 		?ITEMS_RESULT(Allow, LNode, {error, Err});
+	    ?NS_ADMINL(<<"get-registered-users-list">>) ->
+		?ITEMS_RESULT(Allow, LNode, {error, Err});
 	    ?NS_ADMINL(<<"get-registered-users-num">>) ->
+		?ITEMS_RESULT(Allow, LNode, {error, Err});
+	    ?NS_ADMINL(<<"get-online-users-list">>) ->
 		?ITEMS_RESULT(Allow, LNode, {error, Err});
 	    ?NS_ADMINL(<<"get-online-users-num">>) ->
 		?ITEMS_RESULT(Allow, LNode, {error, Err});
@@ -515,8 +498,12 @@ get_local_items(_Host, [<<"user">>], Server, Lang) ->
 	    (?NS_ADMINX(<<"get-user-lastlogin">>))),
       ?NODE(?T("Get User Statistics"),
 	    (?NS_ADMINX(<<"user-stats">>))),
+      ?NODE(?T("Get List of Registered Users"),
+	    (?NS_ADMINX(<<"get-registered-users-list">>))),
       ?NODE(?T("Get Number of Registered Users"),
 	    (?NS_ADMINX(<<"get-registered-users-num">>))),
+      ?NODE(?T("Get List of Online Users"),
+	    (?NS_ADMINX(<<"get-online-users-list">>))),
       ?NODE(?T("Get Number of Online Users"),
 	    (?NS_ADMINX(<<"get-online-users-num">>)))]};
 get_local_items(_Host, [<<"http:">> | _], _Server,
@@ -1065,6 +1052,16 @@ get_form(_Host, ?NS_ADMINL(<<"user-stats">>), Lang) ->
 				   label = tr(Lang, ?T("Jabber ID")),
 				   var = <<"accountjid">>,
 				   required = true}]}};
+get_form(Host, ?NS_ADMINL(<<"get-registered-users-list">>), Lang) ->
+    Values = [jid:encode(jid:make(U, Host))
+              || {U, _} <- ejabberd_auth:get_users(Host)],
+    {result, completed,
+     #xdata{type = form,
+	    fields = [?HFIELD(),
+		      #xdata_field{type = 'jid-multi',
+				   label = tr(Lang, ?T("The list of all users")),
+				   var = <<"registereduserjids">>,
+				   values = Values}]}};
 get_form(Host,
 	 ?NS_ADMINL(<<"get-registered-users-num">>), Lang) ->
     Num = integer_to_binary(ejabberd_auth:count_users(Host)),
@@ -1075,6 +1072,17 @@ get_form(Host,
 				   label = tr(Lang, ?T("Number of registered users")),
 				   var = <<"registeredusersnum">>,
 				   values = [Num]}]}};
+get_form(Host, ?NS_ADMINL(<<"get-online-users-list">>), Lang) ->
+    Accounts = [jid:encode(jid:make(U, Host))
+              || {U, _, _} <- ejabberd_sm:get_vh_session_list(Host)],
+    Values = lists:usort(Accounts),
+    {result, completed,
+     #xdata{type = form,
+	    fields = [?HFIELD(),
+		      #xdata_field{type = 'jid-multi',
+				   label = tr(Lang, ?T("The list of all online users")),
+				   var = <<"onlineuserjids">>,
+				   values = Values}]}};
 get_form(Host, ?NS_ADMINL(<<"get-online-users-num">>),
 	 Lang) ->
     Num = integer_to_binary(ejabberd_sm:get_vh_session_number(Host)),
@@ -1564,4 +1572,4 @@ mod_doc() ->
           ?T("The module provides server configuration functionality via "
              "https://xmpp.org/extensions/xep-0050.html"
              "[XEP-0050: Ad-Hoc Commands]. This module requires "
-             "'mod_adhoc' to be loaded.")}.
+             "_`mod_adhoc`_ to be loaded.")}.

@@ -5,7 +5,7 @@
 %%% Created : 14 Dec 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -37,13 +37,13 @@
 -export([beams/1, validators/1, globals/0, may_hide_data/1]).
 -export([dump/0, dump/1, convert_to_yaml/1, convert_to_yaml/2]).
 -export([callback_modules/1]).
+-export([set_option/2]).
 
 %% Deprecated functions
--export([get_option/2, set_option/2]).
+-export([get_option/2]).
 -export([get_version/0, get_myhosts/0]).
 -export([get_mylang/0, get_lang/1]).
 -deprecated([{get_option, 2},
-	     {set_option, 2},
 	     {get_version, 0},
 	     {get_myhosts, 0},
 	     {get_mylang, 0},
@@ -502,7 +502,13 @@ read_file(File, Opts) ->
 	  end,
     case Ret of
 	{ok, Y} ->
-	    validate(Y);
+            InstalledModules = maybe_install_contrib_modules(Y),
+            ValResult = validate(Y),
+            case InstalledModules of
+                [] -> ok;
+                _ -> spawn(fun() -> timer:sleep(5000), ?MODULE:reload() end)
+            end,
+            ValResult;
 	Err ->
 	    Err
     end.
@@ -527,11 +533,24 @@ read_erlang_file(File, _) ->
 	    Err
     end.
 
+-spec maybe_install_contrib_modules(term()) -> [atom()].
+maybe_install_contrib_modules(Options) ->
+    case {lists:keysearch(allow_contrib_modules, 1, Options),
+          lists:keysearch(install_contrib_modules, 1, Options)} of
+        {Allow, {value, {_, InstallContribModules}}}
+          when (Allow == false) or
+               (Allow == {value, {allow_contrib_modules, true}}) ->
+            ext_mod:install_contrib_modules(InstallContribModules, Options);
+        _ ->
+            []
+    end.
+
 -spec validate(term()) -> {ok, [{atom(), term()}]} | error_return().
 validate(Y1) ->
     case pre_validate(Y1) of
 	{ok, Y2} ->
 	    set_loglevel(proplists:get_value(loglevel, Y2, info)),
+	    ejabberd_logger:set_modules_fully_logged(proplists:get_value(log_modules_fully, Y2, [])),
 	    case ejabberd_config_transformer:map_reduce(Y2) of
 		{ok, Y3} ->
 		    Hosts = proplists:get_value(hosts, Y3),

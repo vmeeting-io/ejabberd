@@ -5,7 +5,7 @@
 %%% Created : 16 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -27,6 +27,8 @@
 -author('alexey@process-one.net').
 -compile({no_auto_import, [{halt, 0}]}).
 
+-protocol({rfc, 6122}).
+-protocol({rfc, 7590}).
 -protocol({xep, 4, '2.9'}).
 -protocol({xep, 86, '1.0'}).
 -protocol({xep, 106, '1.1'}).
@@ -36,6 +38,12 @@
 -protocol({xep, 216, '1.0'}).
 -protocol({xep, 243, '1.0'}).
 -protocol({xep, 270, '1.0'}).
+-protocol({xep, 368, '1.1.0'}).
+-protocol({xep, 386, '0.3.0', '24.02', "", ""}).
+-protocol({xep, 388, '0.4.0', '24.02', "", ""}).
+-protocol({xep, 424, '0.4.0', '24.02', "", ""}).
+-protocol({xep, 440, '0.4.0', '24.02', "", ""}).
+-protocol({xep, 474, '0.3.0', '24.02', "", ""}).
 
 -export([start/0, stop/0, halt/0, start_app/1, start_app/2,
 	 get_pid_file/0, check_apps/0, module_name/1, is_loaded/0]).
@@ -52,7 +60,7 @@ halt() ->
     ejabberd_logger:flush(),
     erlang:halt(1, [{flush, true}]).
 
-%% @spec () -> false | string()
+-spec get_pid_file() -> false | string().
 get_pid_file() ->
     case os:getenv("EJABBERD_PID_PATH") of
 	false ->
@@ -129,7 +137,7 @@ check_apps() ->
       fun() ->
 	      Apps = [ejabberd |
 		      [App || {App, _, _} <- application:which_applications(),
-			      App /= ejabberd]],
+			      App /= ejabberd, App /= hex]],
 	      ?DEBUG("Checking consistency of applications: ~ts",
 		     [misc:join_atoms(Apps, <<", ">>)]),
 	      misc:peach(

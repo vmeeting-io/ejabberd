@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeny Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2002-2021 ProcessOne, SARL. All Rights Reserved.
+%%% @copyright (C) 2002-2024 ProcessOne, SARL. All Rights Reserved.
 %%%
 %%% Licensed under the Apache License, Version 2.0 (the "License");
 %%% you may not use this file except in compliance with the License.
@@ -24,7 +24,8 @@
 %% Unsupported backend API
 -export([init/0]).
 -export([subscribe/4, unsubscribe/2, find_subscriber/2]).
--export([open_session/1, close_session/1, lookup_session/1]).
+-export([open_session/1, close_session/1, lookup_session/1, get_sessions/2]).
+-export([sql_schemas/0]).
 
 -include("logger.hrl").
 -include("ejabberd_sql_pt.hrl").
@@ -36,8 +37,32 @@ init() ->
     ?ERROR_MSG("Backend 'sql' is only supported for db_type", []),
     {error, db_failure}.
 
-init(_Host, _Opts) ->
+init(Host, _Opts) ->
+    ejabberd_sql_schema:update_schema(Host, ?MODULE, sql_schemas()),
     ok.
+
+sql_schemas() ->
+    [#sql_schema{
+        version = 1,
+        tables =
+            [#sql_table{
+                name = <<"mqtt_pub">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"resource">>, type = text},
+                     #sql_column{name = <<"topic">>, type = text},
+                     #sql_column{name = <<"qos">>, type = smallint},
+                     #sql_column{name = <<"payload">>, type = blob},
+                     #sql_column{name = <<"payload_format">>, type = smallint},
+                     #sql_column{name = <<"content_type">>, type = text},
+                     #sql_column{name = <<"response_topic">>, type = text},
+                     #sql_column{name = <<"correlation_data">>, type = blob},
+                     #sql_column{name = <<"user_property">>, type = blob},
+                     #sql_column{name = <<"expiry">>, type = bigint}],
+                indices = [#sql_index{
+                              columns = [<<"topic">>, <<"server_host">>],
+                              unique = true}]}]}].
 
 publish({U, LServer, R}, Topic, Payload, QoS, Props, ExpiryTime) ->
     PayloadFormat = encode_pfi(maps:get(payload_format_indicator, Props, binary)),
@@ -123,6 +148,9 @@ close_session(_) ->
     erlang:nif_error(unsupported_db).
 
 lookup_session(_) ->
+    erlang:nif_error(unsupported_db).
+
+get_sessions(_, _) ->
     erlang:nif_error(unsupported_db).
 
 subscribe(_, _, _, _) ->

@@ -5,7 +5,7 @@
 %%% Created : 19 Mar 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,6 +25,7 @@
 -module(mod_muc).
 -author('alexey@process-one.net').
 -protocol({xep, 45, '1.25'}).
+-protocol({xep, 249, '1.2'}).
 -ifndef(GEN_SERVER).
 -define(GEN_SERVER, gen_server).
 -endif.
@@ -40,14 +41,17 @@
 	 room_destroyed/4,
 	 store_room/4,
 	 store_room/5,
+	 store_changes/4,
 	 restore_room/3,
 	 forget_room/3,
+	 create_room/3,
 	 create_room/5,
 	 shutdown_rooms/1,
 	 process_disco_info/1,
 	 process_disco_items/1,
 	 process_vcard/1,
 	 process_register/1,
+	 process_iq_register/1,
 	 process_muc_unique/1,
 	 process_mucsub/1,
 	 broadcast_service_message/3,
@@ -67,6 +71,7 @@
 	 get_online_rooms_by_user/3,
 	 can_use_nick/4,
 	 get_subscribed_rooms/2,
+         remove_user/2,
 	 procname/2,
 	 route/1, unhibernate_room/3]).
 
@@ -90,6 +95,7 @@
 -callback init(binary(), gen_mod:opts()) -> any().
 -callback import(binary(), binary(), [binary()]) -> ok.
 -callback store_room(binary(), binary(), binary(), list(), list()|undefined) -> {atomic, any()}.
+-callback store_changes(binary(), binary(), binary(), list()) -> {atomic, any()}.
 -callback restore_room(binary(), binary(), binary()) -> muc_room_opts() | error.
 -callback forget_room(binary(), binary(), binary()) -> {atomic, any()}.
 -callback can_use_nick(binary(), binary(), jid(), binary()) -> boolean().
@@ -99,6 +105,7 @@
 -callback register_online_room(binary(), binary(), binary(), pid()) -> any().
 -callback unregister_online_room(binary(), binary(), binary(), pid()) -> any().
 -callback find_online_room(binary(), binary(), binary()) -> {ok, pid()} | error.
+-callback find_online_room_by_pid(binary(), pid()) -> {ok, binary(), binary()} | error.
 -callback get_online_rooms(binary(), binary(), undefined | rsm_set()) -> [{binary(), binary(), pid()}].
 -callback count_online_rooms(binary(), binary()) -> non_neg_integer().
 -callback rsm_supported() -> boolean().
@@ -109,7 +116,8 @@
 -callback get_subscribed_rooms(binary(), binary(), jid()) ->
           {ok, [{jid(), binary(), [binary()]}]} | {error, db_failure}.
 
--optional_callbacks([get_subscribed_rooms/3]).
+-optional_callbacks([get_subscribed_rooms/3,
+                     store_changes/4]).
 
 %%====================================================================
 %% API
@@ -117,6 +125,8 @@
 start(Host, Opts) ->
     case mod_muc_sup:start(Host) of
 	{ok, _} ->
+            ejabberd_hooks:add(remove_user, Host, ?MODULE,
+                               remove_user, 50),
 	    MyHosts = gen_mod:get_opt_hosts(Opts),
 	    Mod = gen_mod:db_mod(Opts, ?MODULE),
 	    RMod = gen_mod:ram_db_mod(Opts, ?MODULE),
@@ -128,6 +138,8 @@ start(Host, Opts) ->
     end.
 
 stop(Host) ->
+    ejabberd_hooks:delete(remove_user, Host, ?MODULE,
+                          remove_user, 50),
     Proc = mod_muc_sup:procname(Host),
     supervisor:terminate_child(ejabberd_gen_mod_sup, Proc),
     supervisor:delete_child(ejabberd_gen_mod_sup, Proc).
@@ -156,7 +168,7 @@ reload(ServerHost, NewOpts, OldOpts) ->
       fun(I) ->
 	      ?GEN_SERVER:cast(procname(ServerHost, I),
 			       {reload, AddHosts, DelHosts, NewHosts})
-      end, lists:seq(1, erlang:system_info(logical_processors))),
+      end, lists:seq(1, misc:logical_processors())),
     load_permanent_rooms(AddHosts, ServerHost, NewOpts),
     shutdown_rooms(ServerHost, DelHosts, OldRMod),
     lists:foreach(
@@ -183,7 +195,7 @@ procname(Host, I) when is_integer(I) ->
       <<(atom_to_binary(?MODULE, latin1))/binary, "_", Host/binary,
 	"_", (integer_to_binary(I))/binary>>, utf8);
 procname(Host, RoomHost) ->
-    Cores = erlang:system_info(logical_processors),
+    Cores = misc:logical_processors(),
     I = erlang:phash2(RoomHost, Cores) + 1,
     procname(Host, I).
 
@@ -295,13 +307,35 @@ create_room(Host, Name, From, Nick, Opts) ->
     Proc = procname(ServerHost, {Name, Host}),
     ?GEN_SERVER:call(Proc, {create, Name, Host, From, Nick, Opts}).
 
+%% @doc Create a room.
+%% If Opts = default, the default room options are used.
+%% Else use the passed options as defined in mod_muc_room.
+create_room(Host, Name, Opts) ->
+    ServerHost = ejabberd_router:host_of_route(Host),
+    Proc = procname(ServerHost, {Name, Host}),
+    ?GEN_SERVER:call(Proc, {create, Name, Host, Opts}).
+
 store_room(ServerHost, Host, Name, Opts) ->
     store_room(ServerHost, Host, Name, Opts, undefined).
+
+maybe_store_new_room(ServerHost, Host, Name, Opts) ->
+    case {proplists:get_bool(persistent, Opts), proplists:get_value(subscribers, Opts, [])} of
+	{false, []} ->
+	    {atomic, ok};
+	{_, Subs} ->
+	    Changes = [{add_subscription, JID, Nick, Nodes} || {JID, Nick, Nodes} <- Subs],
+	    store_room(ServerHost, Host, Name, Opts, Changes)
+    end.
 
 store_room(ServerHost, Host, Name, Opts, ChangesHints) ->
     LServer = jid:nameprep(ServerHost),
     Mod = gen_mod:db_mod(LServer, ?MODULE),
     Mod:store_room(LServer, Host, Name, Opts, ChangesHints).
+
+store_changes(ServerHost, Host, Name, ChangesHints) ->
+    LServer = jid:nameprep(ServerHost),
+    Mod = gen_mod:db_mod(LServer, ?MODULE),
+    Mod:store_changes(LServer, Host, Name, ChangesHints).
 
 restore_room(ServerHost, Host, Name) ->
     LServer = jid:nameprep(ServerHost),
@@ -379,6 +413,26 @@ init([Host, Worker]) ->
 			 {stop, normal, ok, state()}.
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
+handle_call({unhibernate, Room, Host, ResetHibernationTime}, _From,
+    #{server_host := ServerHost} = State) ->
+    RMod = gen_mod:ram_db_mod(ServerHost, ?MODULE),
+    {reply, load_room(RMod, Host, ServerHost, Room, ResetHibernationTime), State};
+handle_call({create, Room, Host, Opts}, _From,
+	    #{server_host := ServerHost} = State) ->
+    ?DEBUG("MUC: create new room '~ts'~n", [Room]),
+    NewOpts = case Opts of
+		  default -> mod_muc_opt:default_room_options(ServerHost);
+		  _ -> Opts
+	      end,
+    RMod = gen_mod:ram_db_mod(ServerHost, ?MODULE),
+    case start_room(RMod, Host, ServerHost, Room, NewOpts) of
+	{ok, _} ->
+	    maybe_store_new_room(ServerHost, Host, Room, NewOpts),
+	    ejabberd_hooks:run(create_room, ServerHost, [ServerHost, Room, Host]),
+	    {reply, ok, State};
+	Err ->
+	    {reply, Err, State}
+    end;
 handle_call({create, Room, Host, From, Nick, Opts}, _From,
 	    #{server_host := ServerHost} = State) ->
     ?DEBUG("MUC: create new room '~ts'~n", [Room]),
@@ -389,6 +443,7 @@ handle_call({create, Room, Host, From, Nick, Opts}, _From,
     RMod = gen_mod:ram_db_mod(ServerHost, ?MODULE),
     case start_room(RMod, Host, ServerHost, Room, NewOpts, From, Nick) of
 	{ok, _} ->
+	    maybe_store_new_room(ServerHost, Host, Room, NewOpts),
 	    ejabberd_hooks:run(create_room, ServerHost, [ServerHost, Room, Host]),
 	    {reply, ok, State};
 	Err ->
@@ -437,6 +492,15 @@ handle_info({route, Packet}, #{server_host := ServerHost} = State) ->
 handle_info({room_destroyed, {Room, Host}, Pid}, State) ->
     %% For backward compat
     handle_cast({room_destroyed, {Room, Host}, Pid}, State);
+handle_info({'DOWN', _Ref, process, Pid, _Reason},
+	    #{server_host := ServerHost} = State) ->
+    RMod = gen_mod:ram_db_mod(ServerHost, ?MODULE),
+    case RMod:find_online_room_by_pid(ServerHost, Pid) of
+	{ok, Room, Host} ->
+	    handle_cast({room_destroyed, {Room, Host}, Pid}, State);
+	_ ->
+	    {noreply, State}
+    end;
 handle_info(Info, State) ->
     ?ERROR_MSG("Unexpected info: ~p", [Info]),
     {noreply, State}.
@@ -528,10 +592,15 @@ extract_password(#iq{} = IQ) ->
 
 -spec unhibernate_room(binary(), binary(), binary()) -> {ok, pid()} | error.
 unhibernate_room(ServerHost, Host, Room) ->
+    unhibernate_room(ServerHost, Host, Room, true).
+
+-spec unhibernate_room(binary(), binary(), binary(), boolean()) -> {ok, pid()} | error.
+unhibernate_room(ServerHost, Host, Room, ResetHibernationTime) ->
     RMod = gen_mod:ram_db_mod(ServerHost, ?MODULE),
     case RMod:find_online_room(ServerHost, Room, Host) of
 	error ->
-	    case load_room(RMod, Host, ServerHost, Room) of
+	    Proc = procname(ServerHost, {Room, Host}),
+	    case ?GEN_SERVER:call(Proc, {unhibernate, Room, Host, ResetHibernationTime}, 20000) of
 		{ok, _} = R -> R;
 		_ -> error
 	    end;
@@ -553,7 +622,7 @@ route_to_room(Packet, ServerHost) ->
 		    Err = xmpp:err_item_not_found(ErrText, Lang),
 		    ejabberd_router:route_error(Packet, Err);
 		StartType ->
-		    case load_room(RMod, Host, ServerHost, Room) of
+		    case load_room(RMod, Host, ServerHost, Room, true) of
 			{error, notfound} when StartType == start ->
 			    case check_create_room(ServerHost, Host, Room, From) of
 				true ->
@@ -608,29 +677,33 @@ process_vcard(#iq{lang = Lang} = IQ) ->
     xmpp:make_error(IQ, xmpp:err_service_unavailable(Txt, Lang)).
 
 -spec process_register(iq()) -> iq().
-process_register(#iq{type = Type, from = From, to = To, lang = Lang,
-		     sub_els = [El = #register{}]} = IQ) ->
+process_register(IQ) ->
+    case process_iq_register(IQ) of
+        {result, Result} ->
+	    xmpp:make_iq_result(IQ, Result);
+        {error, Err} ->
+	    xmpp:make_error(IQ, Err)
+    end.
+
+-spec process_iq_register(iq()) -> {result, register()} | {error, stanza_error()}.
+process_iq_register(#iq{type = Type, from = From, to = To, lang = Lang,
+		     sub_els = [El = #register{}]}) ->
     Host = To#jid.lserver,
+    RegisterDestination = jid:encode(To),
     ServerHost = ejabberd_router:host_of_route(Host),
     AccessRegister = mod_muc_opt:access_register(ServerHost),
     case acl:match_rule(ServerHost, AccessRegister, From) of
 	allow ->
 	    case Type of
 		get ->
-		    xmpp:make_iq_result(
-		      IQ, iq_get_register_info(ServerHost, Host, From, Lang));
+                    {result, iq_get_register_info(ServerHost, RegisterDestination, From, Lang)};
 		set ->
-		    case process_iq_register_set(ServerHost, Host, From, El, Lang) of
-			{result, Result} ->
-			    xmpp:make_iq_result(IQ, Result);
-			{error, Err} ->
-			    xmpp:make_error(IQ, Err)
-		    end
+		    process_iq_register_set(ServerHost, RegisterDestination, From, El, Lang)
 	    end;
 	deny ->
 	    ErrText = ?T("Access denied by service policy"),
 	    Err = xmpp:err_forbidden(ErrText, Lang),
-	    xmpp:make_error(IQ, Err)
+	    {error, Err}
     end.
 
 -spec process_disco_info(iq()) -> iq().
@@ -648,6 +721,10 @@ process_disco_info(#iq{type = get, from = From, to = To, lang = Lang,
 		      true -> [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1, ?NS_MAM_2];
 		      false -> []
 		  end,
+    OccupantIdFeatures = case gen_mod:is_loaded(ServerHost, mod_muc_occupantid) of
+		      true -> [?NS_OCCUPANT_ID];
+		      false -> []
+		  end,
     RSMFeatures = case RMod:rsm_supported() of
 		      true -> [?NS_RSM];
 		      false -> []
@@ -658,7 +735,7 @@ process_disco_info(#iq{type = get, from = From, to = To, lang = Lang,
 		       end,
     Features = [?NS_DISCO_INFO, ?NS_DISCO_ITEMS,
 		?NS_MUC, ?NS_VCARD, ?NS_MUCSUB, ?NS_MUC_UNIQUE
-		| RegisterFeatures ++ RSMFeatures ++ MAMFeatures],
+		| RegisterFeatures ++ RSMFeatures ++ MAMFeatures ++ OccupantIdFeatures],
     Name = mod_muc_opt:name(ServerHost),
     Identity = #identity{category = <<"conference">>,
 			 type = <<"text">>,
@@ -792,46 +869,42 @@ get_rooms(ServerHost, Host) ->
 load_permanent_rooms(Hosts, ServerHost, Opts) ->
     case mod_muc_opt:preload_rooms(Opts) of
 	true ->
-	    Access = get_access(Opts),
-	    HistorySize = mod_muc_opt:history_size(Opts),
-	    QueueType = mod_muc_opt:queue_type(Opts),
-	    RoomShaper = mod_muc_opt:room_shaper(Opts),
-	    RMod = gen_mod:ram_db_mod(Opts, ?MODULE),
 	    lists:foreach(
-	      fun(Host) ->
-		      ?DEBUG("Loading rooms at ~ts", [Host]),
-		      lists:foreach(
+		fun(Host) ->
+		    ?DEBUG("Loading rooms at ~ts", [Host]),
+		    lists:foreach(
 			fun(R) ->
-				{Room, _} = R#muc_room.name_host,
-				case RMod:find_online_room(ServerHost, Room, Host) of
-				    error ->
-					start_room(RMod, Host, ServerHost, Access,
-						   Room, HistorySize, RoomShaper,
-						   R#muc_room.opts, QueueType);
-				    {ok, _} ->
-					ok
-				end
+			    {Room, _} = R#muc_room.name_host,
+			    unhibernate_room(ServerHost, Host, Room, false)
 			end, get_rooms(ServerHost, Host))
-	      end, Hosts);
+		end, Hosts);
 	false ->
 	    ok
     end.
 
--spec load_room(module(), binary(), binary(), binary()) -> {ok, pid()} |
-							   {error, notfound | term()}.
-load_room(RMod, Host, ServerHost, Room) ->
+-spec load_room(module(), binary(), binary(), binary(), boolean()) ->
+    {ok, pid()} | {error, notfound | term()}.
+load_room(RMod, Host, ServerHost, Room, ResetHibernationTime) ->
     case restore_room(ServerHost, Host, Room) of
 	error ->
 	    {error, notfound};
 	Opts0 ->
+	    Mod = gen_mod:db_mod(ServerHost, mod_muc),
 	    case proplists:get_bool(persistent, Opts0) of
 		true ->
 		    ?DEBUG("Restore room: ~ts", [Room]),
-		    start_room(RMod, Host, ServerHost, Room, Opts0);
+		    Res2 = start_room(RMod, Host, ServerHost, Room, Opts0),
+		    case {Res2, ResetHibernationTime} of
+			{{ok, _}, true} ->
+			    NewOpts = lists:keyreplace(hibernation_time, 1, Opts0, {hibernation_time, undefined}),
+			    store_room(ServerHost, Host, Room, NewOpts, []);
+			_ ->
+			    ok
+		    end,
+		    Res2;
 		_ ->
 		    ?DEBUG("Restore hibernated non-persistent room: ~ts", [Room]),
 		    Res = start_room(RMod, Host, ServerHost, Room, Opts0),
-		    Mod = gen_mod:db_mod(ServerHost, mod_muc),
 		    case erlang:function_exported(Mod, get_subscribed_rooms, 3) of
 			true ->
 			    ok;
@@ -878,6 +951,7 @@ start_room(Mod, Host, ServerHost, Access, Room,
     case mod_muc_room:start(Host, ServerHost, Access, Room,
 			    HistorySize, RoomShaper, DefOpts, QueueType) of
 	{ok, Pid} ->
+	    erlang:monitor(process, Pid),
 	    Mod:register_online_room(ServerHost, Room, Host, Pid),
 	    {ok, Pid};
 	Err ->
@@ -890,6 +964,7 @@ start_room(Mod, Host, ServerHost, Access, Room, HistorySize,
 			    HistorySize, RoomShaper,
 			    Creator, Nick, DefOpts, QueueType) of
 	{ok, Pid} ->
+	    erlang:monitor(process, Pid),
 	    Mod:register_online_room(ServerHost, Room, Host, Pid),
 	    {ok, Pid};
 	Err ->
@@ -1086,6 +1161,32 @@ count_online_rooms(ServerHost, Host) ->
     RMod = gen_mod:ram_db_mod(ServerHost, ?MODULE),
     RMod:count_online_rooms(ServerHost, Host).
 
+-spec remove_user(binary(), binary()) -> ok.
+remove_user(User, Server) ->
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
+    Mod = gen_mod:db_mod(LServer, ?MODULE),
+    case erlang:function_exported(Mod, remove_user, 2) of
+	true ->
+            Mod:remove_user(LUser, LServer);
+        false ->
+            ok
+    end,
+    JID = jid:make(User, Server),
+    lists:foreach(
+      fun(Host) ->
+              lists:foreach(
+                fun({_, _, Pid}) ->
+                        mod_muc_room:change_item_async(
+                          Pid, JID, affiliation, none, <<"User removed">>),
+                        mod_muc_room:change_item_async(
+                          Pid, JID, role, none, <<"User removed">>)
+                end,
+                get_online_rooms(LServer, Host))
+      end,
+      gen_mod:get_module_opt_hosts(LServer, mod_muc)),
+    ok.
+
 opts_to_binary(Opts) ->
     lists:map(
       fun({title, Title}) ->
@@ -1096,9 +1197,18 @@ opts_to_binary(Opts) ->
               {password, iolist_to_binary(Pass)};
          ({subject, [C|_] = Subj}) when is_integer(C), C >= 0, C =< 255 ->
               {subject, iolist_to_binary(Subj)};
-         ({subject_author, Author}) ->
-              {subject_author, iolist_to_binary(Author)};
-         ({affiliations, Affs}) ->
+         ({subject_author, {AuthorNick, AuthorJID}}) ->
+              {subject_author, {iolist_to_binary(AuthorNick), AuthorJID}};
+         ({subject_author, AuthorNick}) -> % ejabberd 23.04 or older
+              {subject_author, {iolist_to_binary(AuthorNick), #jid{}}};
+         ({allow_private_messages, Value}) -> % ejabberd 23.04 or older
+              Value2 = case Value of
+                           true -> anyone;
+                           false -> none;
+                           _ -> Value
+                       end,
+              {allowpm, Value2};
+         ({AffOrRole, Affs}) when (AffOrRole == affiliation) or (AffOrRole == role) ->
               {affiliations, lists:map(
                                fun({{U, S, R}, Aff}) ->
                                        NewAff =
@@ -1189,10 +1299,13 @@ mod_opt_type(user_message_shaper) ->
     econf:atom();
 mod_opt_type(user_presence_shaper) ->
     econf:atom();
+mod_opt_type(cleanup_affiliations_on_start) ->
+    econf:bool();
 mod_opt_type(default_room_options) ->
     econf:options(
       #{allow_change_subj => econf:bool(),
-	allow_private_messages => econf:bool(),
+	allowpm =>
+	    econf:enum([anyone, participants, moderators, none]),
 	allow_private_messages_from_visitors =>
 	    econf:enum([anyone, moderators, nobody]),
 	allow_query_users => econf:bool(),
@@ -1200,8 +1313,11 @@ mod_opt_type(default_room_options) ->
 	allow_user_invites => econf:bool(),
 	allow_visitor_nickchange => econf:bool(),
 	allow_visitor_status => econf:bool(),
+	allow_voice_requests => econf:bool(),
 	anonymous => econf:bool(),
 	captcha_protected => econf:bool(),
+	description => econf:binary(),
+	enable_hats => econf:bool(),
 	lang => econf:lang(),
 	logging => econf:bool(),
 	mam => econf:bool(),
@@ -1217,7 +1333,11 @@ mod_opt_type(default_room_options) ->
 	      econf:enum([moderator, participant, visitor])),
 	public => econf:bool(),
 	public_list => econf:bool(),
-	title => econf:binary()});
+	pubsub => econf:binary(),
+	title => econf:binary(),
+	vcard => econf:vcard_temp(),
+	vcard_xupdate => econf:binary(),
+	voice_request_min_interval => econf:pos_int()});
 mod_opt_type(db_type) ->
     econf:db_type(?MODULE);
 mod_opt_type(ram_db_type) ->
@@ -1266,9 +1386,10 @@ mod_options(Host) ->
      {preload_rooms, true},
      {hibernation_timeout, infinity},
      {vcard, undefined},
+     {cleanup_affiliations_on_start, false},
      {default_room_options,
       [{allow_change_subj,true},
-       {allow_private_messages,true},
+       {allowpm,anyone},
        {allow_query_users,true},
        {allow_user_invites,false},
        {allow_visitor_nickchange,true},
@@ -1301,6 +1422,11 @@ mod_doc() ->
 	      "nobody else can use that nickname in any room in the MUC "
 	      "service. To register a nickname, open the Service Discovery in "
 	      "your XMPP client and register in the MUC service."), "",
+	   ?T("It is also possible to register a nickname in a room, so "
+	      "nobody else can use that nickname in that room. If a nick is "
+              "registered in the MUC service, that nick cannot be registered in "
+              "any room, and vice versa: a nick that is registered in a room "
+              "cannot be registered at the MUC service."), "",
 	   ?T("This module supports clustering and load balancing. One module "
 	      "can be started per cluster node. Rooms are distributed at "
 	      "creation time on all available MUC module instances. The "
@@ -1330,39 +1456,38 @@ mod_doc() ->
               desc =>
                   ?T("To configure who is allowed to create new rooms at the "
                      "Multi-User Chat service, this option can be used. "
-                     "By default any account in the local ejabberd server is "
+                     "The default value is 'all', which means everyone is "
                      "allowed to create rooms.")}},
            {access_persistent,
             #{value => ?T("AccessName"),
               desc =>
                   ?T("To configure who is allowed to modify the 'persistent' room option. "
-                     "By default any account in the local ejabberd server is allowed to "
+                     "The default value is 'all', which means everyone is allowed to "
                      "modify that option.")}},
            {access_mam,
             #{value => ?T("AccessName"),
               desc =>
                   ?T("To configure who is allowed to modify the 'mam' room option. "
-                     "By default any account in the local ejabberd server is allowed to "
+                     "The default value is 'all', which means everyone is allowed to "
                      "modify that option.")}},
            {access_register,
             #{value => ?T("AccessName"),
+              note => "improved in 23.10",
               desc =>
                   ?T("This option specifies who is allowed to register nickname "
-                     "within the Multi-User Chat service. The default is 'all' for "
+                     "within the Multi-User Chat service and rooms. The default is 'all' for "
                      "backward compatibility, which means that any user is allowed "
-                     "to register any free nick.")}},
+                     "to register any free nick in the MUC service and in the rooms.")}},
            {db_type,
             #{value => "mnesia | sql",
               desc =>
-                  ?T("Define the type of persistent storage where the module will "
-                     "store room information. The default is the storage defined "
-                     "by the global option 'default_db', or 'mnesia' if omitted.")}},
+                  ?T("Same as top-level _`default_db`_ option, "
+                     "but applied to this module only.")}},
            {ram_db_type,
-            #{value => "mnesia",
+            #{value => "mnesia | sql",
               desc =>
-                  ?T("Define the type of volatile (in-memory) storage where the module "
-                     "will store room information. The only available value for this "
-                     "module is 'mnesia'.")}},
+                  ?T("Same as top-level _`default_ram_db`_ option, "
+                     "but applied to this module only.")}},
            {hibernation_timeout,
             #{value => "infinity | Seconds",
               desc =>
@@ -1414,12 +1539,14 @@ mod_doc() ->
                      "The default value is 'infinity'.")}},
            {max_password,
             #{value => ?T("Number"),
+              note => "added in 21.01",
               desc =>
                   ?T("This option defines the maximum number of characters "
                      "that Password can have when configuring the room. "
                      "The default value is 'infinity'.")}},
            {max_captcha_whitelist,
             #{value => ?T("Number"),
+              note => "added in 21.01",
               desc =>
                   ?T("This option defines the maximum number of characters "
                      "that Captcha Whitelist can have when configuring the room. "
@@ -1457,7 +1584,8 @@ mod_doc() ->
                   ?T("This option defines after how many users in the room, "
                      "it is considered overcrowded. When a MUC room is considered "
                      "overcrowed, presence broadcasts are limited to reduce load, "
-                     "traffic and excessive presence \"storm\" received by participants.")}},
+                     "traffic and excessive presence \"storm\" received by participants. "
+                     "The default value is '1000'.")}},
            {min_message_interval,
             #{value => ?T("Number"),
               desc =>
@@ -1488,7 +1616,7 @@ mod_doc() ->
            {queue_type,
             #{value => "ram | file",
               desc =>
-                  ?T("Same as top-level 'queue_type' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`queue_type`_ option, but applied to this module only.")}},
            {regexp_room_id,
             #{value => "string()",
               desc =>
@@ -1542,10 +1670,17 @@ mod_doc() ->
                      "    -",
                      "      work: true",
                      "      street: Elm Street"]}]}},
+           {cleanup_affiliations_on_start,
+            #{value => "true | false",
+              note => "added in 22.05",
+              desc =>
+                  ?T("Remove affiliations for non-existing local users on startup. "
+                     "The default value is 'false'.")}},
            {default_room_options,
             #{value => ?T("Options"),
+              note => "improved in 22.05",
               desc =>
-                  ?T("This option allows to define the desired "
+                  ?T("Define the "
                      "default room options. Note that the creator of a room "
                      "can modify the options of his room at any time using an "
                      "XMPP client with MUC capability. The 'Options' are:")},
@@ -1554,11 +1689,11 @@ mod_doc() ->
                 desc =>
                     ?T("Allow occupants to change the subject. "
                        "The default value is 'true'.")}},
-             {allow_private_messages,
-              #{value => "true | false",
+             {allowpm,
+              #{value => "anyone | participants | moderators | none",
                 desc =>
-                    ?T("Occupants can send private messages to other occupants. "
-                       "The default value is 'true'.")}},
+                    ?T("Who can send private messages. "
+                       "The default value is 'anyone'.")}},
              {allow_query_users,
               #{value => "true | false",
                 desc =>
@@ -1580,6 +1715,11 @@ mod_doc() ->
                        "If disallowed, the status text is stripped before broadcasting "
                        "the presence update to all the room occupants. "
                        "The default value is 'true'.")}},
+             {allow_voice_requests,
+              #{value => "true | false",
+                desc =>
+                    ?T("Allow visitors in a moderated room to request voice. "
+                       "The default value is 'true'.")}},
              {anonymous,
               #{value => "true | false",
                 desc =>
@@ -1593,8 +1733,18 @@ mod_doc() ->
                     ?T("When a user tries to join a room where they have no "
                        "affiliation (not owner, admin or member), the room "
                        "requires them to fill a CAPTCHA challenge (see section "
-                       "https://docs.ejabberd.im/admin/configuration/#captcha[CAPTCHA] "
+                       "http://../#captcha[CAPTCHA] "
                        "in order to accept their join in the room. "
+                       "The default value is 'false'.")}},
+             {description,
+              #{value => ?T("Room Description"),
+                desc =>
+                    ?T("Short description of the room. "
+                       "The default value is an empty string.")}},
+             {enable_hats,
+              #{value => "true | false",
+                desc =>
+                    ?T("Allow extended roles as defined in XEP-0317 Hats. "
                        "The default value is 'false'.")}},
              {lang,
               #{value => ?T("Language"),
@@ -1605,7 +1755,7 @@ mod_doc() ->
              {logging,
               #{value => "true | false",
                 desc =>
-                    ?T("The public messages are logged using 'mod_muc_log'. "
+                    ?T("The public messages are logged using _`mod_muc_log`_. "
                        "The default value is 'false'.")}},
              {members_by_default,
               #{value => "true | false",
@@ -1651,6 +1801,21 @@ mod_doc() ->
                 desc =>
                     ?T("The list of participants is public, without requiring "
                        "to enter the room. The default value is 'true'.")}},
+             {pubsub,
+              #{value => ?T("PubSub Node"),
+                desc =>
+                    ?T("XMPP URI of associated Publish/Subscribe node. "
+                       "The default value is an empty string.")}},
+             {vcard,
+              #{value => ?T("vCard"),
+                desc =>
+                    ?T("A custom vCard for the room. See the equivalent mod_muc option."
+                       "The default value is an empty string.")}},
+             {voice_request_min_interval,
+              #{value => ?T("Number"),
+                desc =>
+                    ?T("Minimum interval between voice requests, in seconds. "
+                       "The default value is '1800'.")}},
              {mam,
               #{value => "true | false",
                 desc =>

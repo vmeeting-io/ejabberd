@@ -5,7 +5,7 @@
 %%% Created : 27 Feb 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -39,6 +39,7 @@
 -include("logger.hrl").
 -include_lib("xmpp/include/xmpp.hrl").
 -include("ejabberd_http.hrl").
+-include("ejabberd_stacktrace.hrl").
 -include_lib("kernel/include/file.hrl").
 
 -record(state, {sockmod,
@@ -370,7 +371,15 @@ process(Handlers, Request) ->
 			HandlerModule:socket_handoff(
 			  LocalPath, Request, HandlerOpts);
 		    false ->
-			HandlerModule:process(LocalPath, Request)
+                        try
+                            HandlerModule:process(LocalPath, Request)
+                        catch
+                            ?EX_RULE(Class, Reason, Stack) ->
+                                ?ERROR_MSG(
+                                   "HTTP handler crashed: ~s",
+                                   [misc:format_exception(2, Class, Reason, ?EX_STACK(Stack))]),
+                                erlang:raise(Class, Reason, ?EX_STACK(Stack))
+                        end
 		end,
             ejabberd_hooks:run(http_request_debug, [{LocalPath, Request}]),
             R;
@@ -539,12 +548,14 @@ analyze_ip_xff({IPLast, Port}, XFF) ->
 				       TrustedProxies)
 		   of
 		 true ->
-		     {ok, IPFirst} = inet_parse:address(
-                                       binary_to_list(ClientIP)),
-		     ?DEBUG("The IP ~w was replaced with ~w due to "
-			    "header X-Forwarded-For: ~ts",
-			    [IPLast, IPFirst, XFF]),
-		     IPFirst;
+		     case inet_parse:address(binary_to_list(ClientIP)) of
+			 {ok, IPFirst} ->
+			     ?DEBUG("The IP ~w was replaced with ~w due to "
+				    "header X-Forwarded-For: ~ts",
+				    [IPLast, IPFirst, XFF]),
+			     IPFirst;
+			 E -> throw(E)
+		     end;
 		 false -> IPLast
 	       end,
     {IPClient, Port}.

@@ -4,7 +4,7 @@
 %%% Created :  9 Mar 2015 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -124,6 +124,9 @@ handle_info({mnesia_system_event, {mnesia_down, Node}}, State) ->
       fun(S) ->
               mnesia:dirty_delete_object(S)
       end, Sessions),
+    {noreply, State};
+handle_info({mnesia_system_event, {mnesia_up, Node}}, State) ->
+    ?INFO_MSG("Node ~p joined our Mnesia SM tables", [Node]),
     {noreply, State};
 handle_info(Info, State) ->
     ?WARNING_MSG("Unexpected info: ~p", [Info]),

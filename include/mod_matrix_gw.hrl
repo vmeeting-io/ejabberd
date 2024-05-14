@@ -1,6 +1,6 @@
 %%%----------------------------------------------------------------------
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -18,27 +18,11 @@
 %%%
 %%%----------------------------------------------------------------------
 
--record(adhoc_request,
-{
-    lang = <<"">>      :: binary(),
-    node = <<"">>      :: binary(),
-    sessionid = <<"">> :: binary(),
-    action = <<"">>    :: binary(),
-    xdata = false      :: false | xmlel(),
-    others = []        :: [xmlel()]
-}).
-
--record(adhoc_response,
-{
-    lang = <<"">>          :: binary(),
-    node = <<"">>          :: binary(),
-    sessionid = <<"">>     :: binary(),
-    status                 :: atom(),
-    defaultaction = <<"">> :: binary(),
-    actions       = []     :: [binary()],
-    notes         = []     :: [{binary(), binary()}],
-    elements      = []     :: [xmlel()]
-}).
-
--type adhoc_request() :: #adhoc_request{}.
--type adhoc_response() :: #adhoc_response{}.
+-record(room_version,
+        {id :: binary(),
+         %% use the same field names as in Synapse
+         knock_restricted_join_rule :: boolean(),
+         enforce_int_power_levels :: boolean(),
+         implicit_room_creator :: boolean(),
+         updated_redaction_rules :: boolean()
+        }).

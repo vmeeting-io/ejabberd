@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," đã đặt chủ đề thành: "}.
 {"Access denied by service policy","Sự truy cập bị chặn theo chính sách phục vụ"}.
 {"Action on user","Hành động đối với người sử dụng"}.
@@ -106,7 +110,6 @@
 {"Make room persistent","Tạo phòng bền vững"}.
 {"Make room public searchable","Tạo phòng có thể tìm kiếm công khai"}.
 {"March","Tháng Ba"}.
-{"Max # of items to persist","Số mục tối đa để lưu trữ"}.
 {"Max payload size in bytes","Kích thước dung lượng byte tối đa"}.
 {"Maximum Number of Occupants","Số Lượng Người Tham Dự Tối Đa"}.
 {"May","Tháng Năm"}.

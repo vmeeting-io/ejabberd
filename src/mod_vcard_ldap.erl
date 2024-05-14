@@ -4,7 +4,7 @@
 %%% Created : 29 Jul 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -268,7 +268,8 @@ ldap_attribute_to_vcard({Attr, Value}, V) ->
 	<<"role">> -> V#vcard_temp{role = Value};
 	<<"tel">> -> V#vcard_temp{tel = [#vcard_tel{number = Value}|Ts]};
 	<<"email">> -> V#vcard_temp{email = [#vcard_email{userid = Value}|Es]};
-	<<"photo">> -> V#vcard_temp{photo = #vcard_photo{binval = Value}};
+	<<"photo">> -> V#vcard_temp{photo = #vcard_photo{binval = Value,
+                                                         type = photo_type(Value)}};
 	<<"family">> -> V#vcard_temp{n = N#vcard_name{family = Value}};
 	<<"given">> -> V#vcard_temp{n = N#vcard_name{given = Value}};
 	<<"middle">> -> V#vcard_temp{n = N#vcard_name{middle = Value}};
@@ -281,6 +282,11 @@ ldap_attribute_to_vcard({Attr, Value}, V) ->
 	<<"pcode">> -> V#vcard_temp{adr = [A#vcard_adr{pcode = Value}]};
 	_ -> V
     end.
+
+-spec photo_type(binary()) -> binary().
+photo_type(Value) ->
+    Type = eimp:get_type(Value),
+    <<"image/", (atom_to_binary(Type, latin1))/binary>>.
 
 map_vcard_attr(VCardName, Attributes, Pattern, UD) ->
     Res = lists:filter(
@@ -565,7 +571,7 @@ mod_doc() ->
 		   }]}}] ++
           [{Opt,
             #{desc =>
-                  {?T("Same as top-level '~s' option, but "
+                  {?T("Same as top-level _`~s`_ option, but "
                       "applied to this module only."), [Opt]}}}
            || Opt <- [ldap_base, ldap_servers, ldap_uids,
                       ldap_deref_aliases, ldap_encrypt, ldap_password,

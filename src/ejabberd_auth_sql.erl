@@ -5,7 +5,7 @@
 %%% Created : 12 Dec 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -34,6 +34,7 @@
 	 get_users/2, count_users/2, get_password/2,
 	 remove_user/2, store_type/1, plain_password_required/1,
 	 export/1, which_users_exists/2]).
+-export([sql_schemas/0]).
 
 -include_lib("xmpp/include/scram.hrl").
 -include("logger.hrl").
@@ -45,7 +46,31 @@
 %%%----------------------------------------------------------------------
 %%% API
 %%%----------------------------------------------------------------------
-start(_Host) -> ok.
+start(Host) ->
+    ejabberd_sql_schema:update_schema(Host, ?MODULE, sql_schemas()),
+    ok.
+
+sql_schemas() ->
+    [#sql_schema{
+        version = 1,
+        tables =
+            [#sql_table{
+                name = <<"users">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"password">>, type = text},
+                     #sql_column{name = <<"serverkey">>, type = {text, 128},
+                                 default = true},
+                     #sql_column{name = <<"salt">>, type = {text, 128},
+                                 default = true},
+                     #sql_column{name = <<"iterationcount">>, type = integer,
+                                 default = true},
+                     #sql_column{name = <<"created_at">>, type = timestamp,
+                                 default = true}],
+                indices = [#sql_index{
+                              columns = [<<"server_host">>, <<"username">>],
+                              unique = true}]}]}].
 
 stop(_Host) -> ok.
 
@@ -161,7 +186,10 @@ set_password_t(LUser, LServer, Password) ->
        "users",
        ["!username=%(LUser)s",
         "!server_host=%(LServer)s",
-	"password=%(Password)s"]).
+	"password=%(Password)s",
+	"serverkey=''",
+	"salt=''",
+	"iterationcount=0"]).
 
 get_password_scram(LServer, LUser) ->
     ejabberd_sql:sql_query(
@@ -299,6 +327,20 @@ export(_Server) ->
                   ["username=%(LUser)s",
                    "server_host=%(LServer)s",
                    "password=%(Password)s"])];
+         (Host, {passwd, {LUser, LServer},
+                         {scram, StoredKey1, ServerKey, Salt, IterationCount}})
+            when LServer == Host ->
+              Hash = sha,
+              StoredKey = scram_hash_encode(Hash, StoredKey1),
+              [?SQL("delete from users where username=%(LUser)s and %(LServer)H;"),
+               ?SQL_INSERT(
+                  "users",
+                  ["username=%(LUser)s",
+                   "server_host=%(LServer)s",
+                   "password=%(StoredKey)s",
+                   "serverkey=%(ServerKey)s",
+                   "salt=%(Salt)s",
+                   "iterationcount=%(IterationCount)d"])];
          (Host, #passwd{us = {LUser, LServer}, password = #scram{} = Scram})
             when LServer == Host ->
 	      StoredKey = scram_hash_encode(Scram#scram.hash, Scram#scram.storedkey),

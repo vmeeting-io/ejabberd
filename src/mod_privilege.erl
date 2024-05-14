@@ -4,7 +4,7 @@
 %%% Purpose : XEP-0356: Privileged Entity
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,7 +25,7 @@
 
 -author('amuhar3@gmail.com').
 
--protocol({xep, 0356, '0.2.1'}).
+-protocol({xep, 356, '0.2.1', '16.09', "", ""}).
 
 -behaviour(gen_server).
 -behaviour(gen_mod).
@@ -106,7 +106,7 @@ mod_doc() ->
 	   ?T("WARNING: Security issue: Privileged access gives components "
 	      "access to sensitive data, so permission should be granted "
 	      "carefully, only if you trust a component."), "",
-           ?T("NOTE: This module is complementary to 'mod_delegation', "
+           ?T("NOTE: This module is complementary to _`mod_delegation`_, "
               "but can also be used separately.")],
       opts =>
           [{roster,
@@ -217,19 +217,24 @@ process_message(#message{from = #jid{luser = <<"">>, lresource = <<"">>} = From,
 process_message(_Stanza) ->
     ok.
 
--spec roster_access(boolean(), iq()) -> boolean().
-roster_access(true, _) ->
-    true;
-roster_access(false, #iq{from = From, to = To, type = Type}) ->
+-spec roster_access({true, iq()} | false, iq()) -> {true, iq()} | false.
+roster_access({true, _IQ} = Acc, _) ->
+    Acc;
+roster_access(false, #iq{from = From, to = To, type = Type} = IQ) ->
     Host = From#jid.lserver,
     ServerHost = To#jid.lserver,
     Permissions = get_permissions(ServerHost),
     case maps:find(Host, Permissions) of
 	{ok, Access} ->
 	    Permission = proplists:get_value(roster, Access, none),
-	    (Permission == both)
-		orelse (Permission == get andalso Type == get)
-		orelse (Permission == set andalso Type == set);
+	    case (Permission == both)
+		     orelse (Permission == get andalso Type == get)
+		     orelse (Permission == set andalso Type == set) of
+		true ->
+		    {true, xmpp:put_meta(IQ, privilege_from, To)};
+		false ->
+		    false
+	    end;
 	error ->
 	    %% Component is disconnected
 	    false
@@ -403,6 +408,9 @@ forward_message(#message{to = To} = Msg) ->
 		#message{} = NewMsg ->
 		    case NewMsg#message.from of
 			#jid{lresource = <<"">>, lserver = ServerHost} ->
+                            FromJID = NewMsg#message.from,
+                            State = #{jid => FromJID},
+                            ejabberd_hooks:run_fold(user_send_packet, FromJID#jid.lserver, {NewMsg, State}, []),
 			    ejabberd_router:route(NewMsg);
 			_ ->
 			    Lang = xmpp:get_lang(Msg),

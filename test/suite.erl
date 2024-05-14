@@ -3,7 +3,7 @@
 %%% Created : 27 Jun 2013 by Evgeniy Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -131,6 +131,7 @@ init_config(Config) ->
      {resource, <<"resource!@#$%^&*()'\"`~<>+-/;:_=[]{}|\\">>},
      {master_resource, <<"master_resource!@#$%^&*()'\"`~<>+-/;:_=[]{}|\\">>},
      {slave_resource, <<"slave_resource!@#$%^&*()'\"`~<>+-/;:_=[]{}|\\">>},
+     {update_sql, false},
      {password, Password},
      {backends, Backends}
      |Config].
@@ -546,10 +547,11 @@ decode_stream_element(NS, El) ->
     decode(El, NS, []).
 
 format_element(El) ->
-    case erlang:function_exported(ct, log, 5) of
+    Bin = case erlang:function_exported(ct, log, 5) of
 	true -> ejabberd_web_admin:pretty_print_xml(El);
 	false -> io_lib:format("~p~n", [El])
-    end.
+    end,
+    binary:replace(Bin, <<"<">>, <<"&lt;">>, [global]).
 
 decode(El, NS, Opts) ->
     try

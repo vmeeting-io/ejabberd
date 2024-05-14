@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," konuyu değiştirdi: "}.
 {"A friendly name for the node","Düğüm için dostane bir isim"}.
 {"A password is required to enter this room","Bu odaya girmek için parola gerekiyor"}.
@@ -119,7 +123,6 @@
 {"is now known as","isim değiştirdi :"}.
 {"It is not allowed to send private messages of type \"groupchat\"","\"groupchat\" tipinde özel mesajlar gönderilmesine izin verilmiyor"}.
 {"It is not allowed to send private messages to the conference","Konferansa özel mesajlar gönderilmesine izin verilmiyor"}.
-{"It is not allowed to send private messages","Özel mesaj gönderilmesine izin verilmiyor"}.
 {"Jabber ID","Jabber ID"}.
 {"January","Ocak"}.
 {"joins the room","odaya katıldı"}.
@@ -139,7 +142,6 @@
 {"Make room persistent","Odayı kalıcı hale getir"}.
 {"Make room public searchable","Odayı herkes tarafından aranabilir hale getir"}.
 {"March","Mart"}.
-{"Max # of items to persist","Kalıcı hale getirilecek en fazla öğe sayısı"}.
 {"Max payload size in bytes","En fazla yük (payload) boyutu (bayt olarak)"}.
 {"Maximum Number of Occupants","Odada En Fazla Bulunabilecek Kişi Sayısı"}.
 {"May","Mayıs"}.

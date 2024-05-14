@@ -5,7 +5,7 @@
 %%% Created :  1 Dec 2007 by Christophe Romain <christophe.romain@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -45,6 +45,7 @@
 -include("mod_roster.hrl").
 -include("translate.hrl").
 -include("ejabberd_stacktrace.hrl").
+-include("ejabberd_commands.hrl").
 
 -define(STDTREE, <<"tree">>).
 -define(STDNODE, <<"flat">>).
@@ -92,6 +93,9 @@
 -export([start/2, stop/1, init/1,
     handle_call/3, handle_cast/2, handle_info/2, mod_doc/0,
     terminate/2, code_change/3, depends/2, mod_opt_type/1, mod_options/1]).
+
+%% ejabberd commands
+-export([get_commands_spec/0, delete_old_items/1, delete_expired_items/0]).
 
 -export([route/1]).
 
@@ -210,7 +214,7 @@
 	pep_mapping             :: [{binary(), binary()}],
 	ignore_pep_from_offline :: boolean(),
 	last_item_cache         :: boolean(),
-	max_items_node          :: non_neg_integer(),
+	max_items_node          :: non_neg_integer()|unlimited,
 	max_subscriptions_node  :: non_neg_integer()|undefined,
 	default_node_config     :: [{atom(), binary()|boolean()|integer()|atom()}],
 	nodetree                :: binary(),
@@ -337,6 +341,7 @@ init([ServerHost|_]) ->
 	false ->
 	    ok
     end,
+    ejabberd_commands:register_commands(?MODULE, get_commands_spec()),
     NodeTree = config(ServerHost, nodetree),
     Plugins = config(ServerHost, plugins),
     PepMapping = config(ServerHost, pep_mapping),
@@ -705,8 +710,7 @@ remove_user(User, Server) ->
 					case node_action(Host, PType,
 							 get_state,
 							 [Nidx, jid:tolower(Entity)]) of
-					    {result, State} ->
-						ItemIds = State#pubsub_state.items,
+					    {result, #pubsub_state{items = ItemIds}} ->
 						node_action(Host, PType,
 							    remove_extra_items,
 							    [Nidx, 0, ItemIds]),
@@ -807,7 +811,13 @@ terminate(_Reason,
 	      gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_COMMANDS),
 	      terminate_plugins(Host, ServerHost, Plugins, TreePlugin),
 	      ejabberd_router:unregister_route(Host)
-      end, Hosts).
+      end, Hosts),
+    case gen_mod:is_loaded_elsewhere(ServerHost, ?MODULE) of
+	false ->
+	    ejabberd_commands:unregister_commands(get_commands_spec());
+	true ->
+	    ok
+    end.
 
 %%--------------------------------------------------------------------
 %% Func: code_change(OldVsn, State, Extra) -> {ok, NewState}
@@ -959,6 +969,7 @@ node_disco_info(Host, Node, _From, _Identity, _Features) ->
 			  _ -> []
 		       end,
 		Meta = [{title, get_option(Options, title, <<>>)},
+			{type, get_option(Options, type, <<>>)},
 			{description, get_option(Options, description, <<>>)},
 			{owner, [jid:make(LJID) || {LJID, Aff} <- Affs, Aff =:= owner]},
 			{publisher, [jid:make(LJID) || {LJID, Aff} <- Affs, Aff =:= publisher]},
@@ -1964,6 +1975,9 @@ delete_item(Host, Node, Publisher, ItemId, ForceNotify) ->
 	    Nidx = TNode#pubsub_node.id,
 	    Type = TNode#pubsub_node.type,
 	    Options = TNode#pubsub_node.options,
+	    ServerHost = serverhost(Host),
+	    ejabberd_hooks:run(pubsub_delete_item, ServerHost,
+			       [ServerHost, Node, Publisher, service_jid(Host), ItemId]),
 	    broadcast_retract_items(Host, Node, Nidx, Type, Options, [ItemId], ForceNotify),
 	    case get_cached_item(Host, Nidx) of
 		#pubsub_item{itemid = {ItemId, Nidx}} -> unset_cached_item(Host, Nidx);
@@ -2252,10 +2266,11 @@ get_affiliations(Host, Node, JID) ->
 set_affiliations(Host, Node, From, Affs) ->
     Owner = jid:tolower(jid:remove_resource(From)),
     Action =
-	fun(#pubsub_node{type = Type, id = Nidx, owners = O} = N) ->
+	fun(#pubsub_node{type = Type, id = Nidx, owners = O, options = Options} = N) ->
 		Owners = node_owners_call(Host, Type, Nidx, O),
 		case lists:member(Owner, Owners) of
 		    true ->
+			AccessModel = get_option(Options, access_model),
 			OwnerJID = jid:make(Owner),
 			FilteredAffs =
 			    case Owners of
@@ -2286,6 +2301,17 @@ set_affiliations(Host, Node, From, Affs) ->
 					      _ ->
 						  ok
 					  end;
+				      _ ->
+					  ok
+				  end,
+				  case AccessModel of
+				      whitelist when Affiliation /= owner,
+						     Affiliation /= publisher,
+						     Affiliation /= member ->
+					  node_action(Host, Type,
+						      unsubscribe_node,
+						      [Nidx, OwnerJID, JID,
+						       all]);
 				      _ ->
 					  ok
 				  end
@@ -3344,9 +3370,10 @@ get_option(Options, Var, Def) ->
 -spec node_options(host(), binary()) -> [{atom(), any()}].
 node_options(Host, Type) ->
     DefaultOpts = node_plugin_options(Host, Type),
-    case config(Host, plugins) of
-	[Type|_] -> config(Host, default_node_config, DefaultOpts);
-	_ -> DefaultOpts
+    case lists:member(Type, config(Host, plugins)) of
+	true ->
+            config(Host, default_node_config, DefaultOpts);
+	false -> DefaultOpts
     end.
 
 -spec node_plugin_options(host(), binary()) -> [{atom(), any()}].
@@ -3392,22 +3419,17 @@ node_config(Node, ServerHost, [{RE, Opts}|NodeOpts]) ->
 node_config(_, _, []) ->
     [].
 
-%% @spec (Host, Options) -> MaxItems
-%%         Host = host()
-%%         Options = [Option]
-%%         Option = {Key::atom(), Value::term()}
-%%         MaxItems = integer() | unlimited
 %% @doc <p>Return the maximum number of items for a given node.</p>
 %% <p>Unlimited means that there is no limit in the number of items that can
 %% be stored.</p>
--spec max_items(host(), [{atom(), any()}]) -> non_neg_integer().
+-spec max_items(host(), [{atom(), any()}]) -> non_neg_integer() | unlimited.
 max_items(Host, Options) ->
     case get_option(Options, persist_items) of
 	true ->
 	    case get_option(Options, max_items) of
 		I when is_integer(I), I < 0 -> 0;
 		I when is_integer(I) -> I;
-		_ -> ?MAXITEMS
+		_ -> get_max_items_node(Host)
 	    end;
 	false ->
 	    case get_option(Options, send_last_published_item) of
@@ -3421,6 +3443,14 @@ max_items(Host, Options) ->
 	    end
     end.
 
+-spec item_expire(host(), [{atom(), any()}]) -> non_neg_integer() | infinity.
+item_expire(Host, Options) ->
+    case get_option(Options, item_expire) of
+	I when is_integer(I), I < 0 -> 0;
+	I when is_integer(I) -> I;
+	_ -> get_max_item_expire_node(Host)
+    end.
+
 -spec get_configure_xfields(_, pubsub_node_config:result(),
 			    binary(), [binary()]) -> [xdata_field()].
 get_configure_xfields(_Type, Options, Lang, Groups) ->
@@ -3430,6 +3460,10 @@ get_configure_xfields(_Type, Options, Lang, Groups) ->
 		{true, {roster_groups_allowed, Value, Groups}};
 	   ({sql, _}) -> false;
 	   ({rsm, _}) -> false;
+	   ({Item, infinity}) when Item == max_items;
+				   Item == item_expire;
+				   Item == children_max ->
+	       {true, {Item, max}};
 	   (_) -> true
 	end, Options),
       Lang).
@@ -3494,17 +3528,24 @@ decode_node_config(undefined, _, _) ->
 decode_node_config(#xdata{fields = Fs}, Host, Lang) ->
     try
 	Config = pubsub_node_config:decode(Fs),
-	Max = get_max_items_node(Host),
-	case {check_opt_range(max_items, Config, Max),
+	MaxItems = get_max_items_node(Host),
+	MaxExpiry = get_max_item_expire_node(Host),
+	case {check_opt_range(max_items, Config, MaxItems),
+	      check_opt_range(item_expire, Config, MaxExpiry),
 	      check_opt_range(max_payload_size, Config, ?MAX_PAYLOAD_SIZE)} of
-	    {true, true} ->
+	    {true, true, true} ->
 		Config;
-	    {true, false} ->
+	    {true, true, false} ->
 		erlang:error(
 		  {pubsub_node_config,
 		   {bad_var_value, <<"pubsub#max_payload_size">>,
 		    ?NS_PUBSUB_NODE_CONFIG}});
-	    {false, _} ->
+	    {true, false, _} ->
+		erlang:error(
+		  {pubsub_node_config,
+		   {bad_var_value, <<"pubsub#item_expire">>,
+		    ?NS_PUBSUB_NODE_CONFIG}});
+	    {false, _, _} ->
 		erlang:error(
 		  {pubsub_node_config,
 		   {bad_var_value, <<"pubsub#max_items">>,
@@ -3549,16 +3590,25 @@ decode_get_pending(#xdata{fields = Fs}, Lang) ->
 	    {error, xmpp:err_resource_constraint(Txt, Lang)}
     end.
 
--spec check_opt_range(atom(), [proplists:property()], non_neg_integer()) -> boolean().
-check_opt_range(_Opt, _Opts, undefined) ->
+-spec check_opt_range(atom(), [proplists:property()],
+		      non_neg_integer() | unlimited | infinity) -> boolean().
+check_opt_range(_Opt, _Opts, unlimited) ->
+    true;
+check_opt_range(_Opt, _Opts, infinity) ->
     true;
 check_opt_range(Opt, Opts, Max) ->
-    Val = proplists:get_value(Opt, Opts, Max),
-    Val =< Max.
+    case proplists:get_value(Opt, Opts, Max) of
+	max -> true;
+	Val -> Val =< Max
+    end.
 
--spec get_max_items_node(host()) -> undefined | non_neg_integer().
+-spec get_max_items_node(host()) -> unlimited | non_neg_integer().
 get_max_items_node(Host) ->
-    config(Host, max_items_node, undefined).
+    config(Host, max_items_node, ?MAXITEMS).
+
+-spec get_max_item_expire_node(host()) -> infinity | non_neg_integer().
+get_max_item_expire_node(Host) ->
+    config(Host, max_item_expire_node, infinity).
 
 -spec get_max_subscriptions_node(host()) -> undefined | non_neg_integer().
 get_max_subscriptions_node(Host) ->
@@ -3708,6 +3758,7 @@ features() ->
      <<"access-whitelist">>,   % OPTIONAL
      <<"collections">>,   % RECOMMENDED
      <<"config-node">>,   % RECOMMENDED
+     <<"config-node-max">>,
      <<"create-and-configure">>,   % RECOMMENDED
      <<"item-ids">>,   % RECOMMENDED
      <<"last-published">>,   % RECOMMENDED
@@ -3755,7 +3806,9 @@ tree_call({_User, Server, _Resource}, Function, Args) ->
 tree_call(Host, Function, Args) ->
     Tree = tree(Host),
     ?DEBUG("Tree_call apply(~ts, ~ts, ~p) @ ~ts", [Tree, Function, Args, Host]),
-    case apply(Tree, Function, Args) of
+    Res = apply(Tree, Function, Args),
+    Res2 = ejabberd_hooks:run_fold(pubsub_tree_call, Host, Res, [Tree, Function, Args]),
+    case Res2 of
 	{error, #stanza_error{}} = Err ->
 	    Err;
 	{error, {virtual, _}} = Err ->
@@ -3821,6 +3874,8 @@ node_call(Host, Type, Function, Args) ->
 	true ->
 	    case apply(Module, Function, Args) of
 		{result, Result} ->
+		    {result, Result};
+		#pubsub_state{} = Result ->
 		    {result, Result};
 		{error, #stanza_error{}} = Err ->
 		    Err;
@@ -4135,6 +4190,93 @@ purge_offline(Host, LJID, Node) ->
 	    {error, xmpp:err_internal_server_error(Txt, Lang)}
     end.
 
+-spec delete_old_items(non_neg_integer()) -> ok | error.
+delete_old_items(N) ->
+    Results = lists:flatmap(
+		fun(Host) ->
+			case tree_action(Host, get_all_nodes, [Host]) of
+			    Nodes when is_list(Nodes) ->
+				lists:map(
+				  fun(#pubsub_node{id = Nidx, type = Type}) ->
+					  case node_action(Host, Type,
+							   remove_extra_items,
+							   [Nidx , N]) of
+					      {result, _} ->
+						  ok;
+					      {error, _} ->
+						  error
+					  end
+				  end, Nodes);
+			    _ ->
+				[error]
+			end
+		end, ejabberd_option:hosts()),
+    case lists:member(error, Results) of
+	true ->
+	    error;
+	false ->
+	    ok
+    end.
+
+-spec delete_expired_items() -> ok | error.
+delete_expired_items() ->
+    Results = lists:flatmap(
+		fun(Host) ->
+			case tree_action(Host, get_all_nodes, [Host]) of
+			    Nodes when is_list(Nodes) ->
+				lists:map(
+				  fun(#pubsub_node{id = Nidx, type = Type,
+						   options = Options}) ->
+					  case item_expire(Host, Options) of
+					      infinity ->
+						  ok;
+					      Seconds ->
+						  case node_action(
+							 Host, Type,
+							 remove_expired_items,
+							 [Nidx, Seconds]) of
+						      {result, []} ->
+							  ok;
+						      {result, [_|_]} ->
+							  unset_cached_item(
+							    Host, Nidx);
+						      {error, _} ->
+							  error
+						  end
+					  end
+				  end, Nodes);
+			    _ ->
+				[error]
+			end
+		end, ejabberd_option:hosts()),
+    case lists:member(error, Results) of
+	true ->
+	    error;
+	false ->
+	    ok
+    end.
+
+-spec get_commands_spec() -> [ejabberd_commands()].
+get_commands_spec() ->
+    [#ejabberd_commands{name = delete_old_pubsub_items, tags = [purge],
+			desc = "Keep only NUMBER of PubSub items per node",
+		        note = "added in 21.12",
+			module = ?MODULE, function = delete_old_items,
+			args_desc = ["Number of items to keep per node"],
+			args = [{number, integer}],
+			result = {res, rescode},
+			result_desc = "0 if command failed, 1 when succeeded",
+			args_example = [1000],
+			result_example = ok},
+     #ejabberd_commands{name = delete_expired_pubsub_items, tags = [purge],
+			desc = "Delete expired PubSub items",
+		        note = "added in 21.12",
+			module = ?MODULE, function = delete_expired_items,
+			args = [],
+			result = {res, rescode},
+			result_desc = "0 if command failed, 1 when succeeded",
+			result_example = ok}].
+
 -spec mod_opt_type(atom()) -> econf:validator().
 mod_opt_type(access_createnode) ->
     econf:acl();
@@ -4145,7 +4287,9 @@ mod_opt_type(ignore_pep_from_offline) ->
 mod_opt_type(last_item_cache) ->
     econf:bool();
 mod_opt_type(max_items_node) ->
-    econf:non_neg_int();
+    econf:non_neg_int(unlimited);
+mod_opt_type(max_item_expire_node) ->
+    econf:timeout(second, infinity);
 mod_opt_type(max_nodes_discoitems) ->
     econf:non_neg_int(infinity);
 mod_opt_type(max_subscriptions_node) ->
@@ -4193,6 +4337,7 @@ mod_options(Host) ->
      {ignore_pep_from_offline, true},
      {last_item_cache, false},
      {max_items_node, ?MAXITEMS},
+     {max_item_expire_node, infinity},
      {max_nodes_discoitems, 100},
      {nodetree, ?STDTREE},
      {pep_mapping, []},
@@ -4211,7 +4356,7 @@ mod_doc() ->
 	      "(https://xmpp.org/extensions/xep-0163.html"
 	      "[XEP-0163: Personal Eventing via Pubsub]) "
 	      "is enabled in the default ejabberd configuration file, "
-	      "and it requires 'mod_caps'.")],
+	      "and it requires _`mod_caps`_.")],
       opts =>
 	  [{access_createnode,
 	    #{value => "AccessName",
@@ -4224,7 +4369,7 @@ mod_doc() ->
 	   {db_type,
 	    #{value => "mnesia | sql",
 	      desc =>
-		  ?T("Same as top-level 'default_db' option, but applied to "
+		  ?T("Same as top-level _`default_db`_ option, but applied to "
 		     "this module only.")}},
 	   {default_node_config,
 	    #{value => "List of Key:Value",
@@ -4269,13 +4414,19 @@ mod_doc() ->
 		     "items. Value is 'true' or 'false'. If not defined, "
 		     "pubsub does not cache last items. On systems with not"
 		     " so many nodes, caching last items speeds up pubsub "
-		     "and allows to raise user connection rate. The cost "
+		     "and allows you to raise the user connection rate. The cost "
 		     "is memory usage, as every item is stored in memory.")}},
+	   {max_item_expire_node,
+	    #{value => "timeout() | infinity",
+	      note => "added in 21.12",
+	      desc =>
+		  ?T("Specify the maximum item epiry time. Default value "
+		     "is: 'infinity'.")}},
 	   {max_items_node,
-	    #{value => "MaxItems",
+	    #{value => "non_neg_integer() | infinity",
 	      desc =>
 		  ?T("Define the maximum number of items that can be "
-		     "stored in a node. Default value is: '10'.")}},
+		     "stored in a node. Default value is: '1000'.")}},
 	   {max_nodes_discoitems,
 	    #{value => "pos_integer() | infinity",
 	      desc =>
@@ -4318,7 +4469,7 @@ mod_doc() ->
 	   {pep_mapping,
 	    #{value => "List of Key:Value",
 	      desc =>
-		  ?T("This allows to define a list of key-value to choose "
+		  ?T("In this option you can provide a list of key-value to choose "
 		     "defined node plugins on given PEP namespace. "
 		     "The following example will use 'node_tune' instead of "
 		     "'node_pep' for every PEP node with the tune namespace:"),
@@ -4341,9 +4492,9 @@ mod_doc() ->
 			  "to the 'create' stanza element."),
 		       ?T("- 'flat' plugin handles the default behaviour and "
 			  "follows standard XEP-0060 implementation."),
-		       ?T("- 'pep' plugin adds extention to handle Personal "
+		       ?T("- 'pep' plugin adds extension to handle Personal "
 			  "Eventing Protocol (XEP-0163) to the PubSub engine. "
-			  "Adding pep allows to handle PEP automatically.")]}},
+			  "When enabled, PEP is handled automatically.")]}},
 	   {vcard,
 	    #{value => ?T("vCard"),
 	      desc =>

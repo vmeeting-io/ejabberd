@@ -5,7 +5,7 @@
 %%% Created : 22 Dec 2004 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -51,7 +51,9 @@ start(Host) ->
 		     type => supervisor,
 		     modules => [?MODULE]},
 	    case supervisor:start_child(ejabberd_db_sup, Spec) of
-		{ok, _} -> ok;
+		{ok, _} ->
+                    ejabberd_sql_schema:start(Host),
+                    ok;
 		{error, {already_started, Pid}} ->
                     %% Wait for the supervisor to fully start
                     _ = supervisor:count_children(Pid),
@@ -188,7 +190,11 @@ check_sqlite_db(Host) ->
 
 create_sqlite_tables(DB) ->
     SqlDir = misc:sql_dir(),
-    File = filename:join(SqlDir, "lite.sql"),
+    Filename = case ejabberd_sql:use_new_schema() of
+        true -> "lite.new.sql";
+        false -> "lite.sql"
+    end,
+    File = filename:join(SqlDir, Filename),
     case file:open(File, [read, binary]) of
         {ok, Fd} ->
             Qs = read_lines(Fd, File, []),

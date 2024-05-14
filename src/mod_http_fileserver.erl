@@ -5,7 +5,7 @@
 %%% Created :
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -151,7 +151,9 @@ initialize(Host, Opts) ->
 	   content_types = ContentTypes,
 	   user_access = UserAccess}.
 
-%% @spec (AdminCTs::[CT], Default::[CT]) -> [CT]
+-spec build_list_content_types(AdminCTs::[{binary(), binary()|undefined}],
+                               Default::[{binary(), binary()|undefined}]) ->
+    [{string(), string()|undefined}].
 %% where CT = {Extension::string(), Value}
 %%       Value = string() | undefined
 %% @doc Return a unified list without duplicates.
@@ -265,7 +267,8 @@ code_change(_OldVsn, State, _Extra) ->
 %% request_handlers callbacks
 %%====================================================================
 
-%% @spec (LocalPath, Request) -> {HTTPCode::integer(), [Header], Page::string()}
+-spec process(LocalPath::[binary()], #request{}) ->
+    {HTTPCode::integer(), [{binary(), binary()}], Page::string()}.
 %% @doc Handle an HTTP request.
 %% LocalPath is the part of the requested URL path that is "local to the module".
 %% Returns the page to be sent back to the client and/or HTTP status code.
@@ -554,7 +557,7 @@ mod_doc() ->
       example =>
           [{?T("This example configuration will serve the files from the "
 	       "local directory '/var/www' in the address "
-	       "'http://example.org:5280/pub/archive/'. In this example a new "
+	       "'http://example.org:5280/pub/content/'. In this example a new "
 	       "content type 'ogg' is defined, 'png' is redefined, and 'jpg' "
 	       "definition is deleted:"),
 	   ["listen:",
@@ -564,7 +567,7 @@ mod_doc() ->
            "    module: ejabberd_http",
            "    request_handlers:",
            "      ...",
-           "      /pub/archive: mod_http_fileserver",
+           "      /pub/content: mod_http_fileserver",
            "      ...",
            "  ...",
            "",

@@ -5,7 +5,7 @@
 %%% Created :  4 May 2008 by Badlop <badlop@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -22,32 +22,6 @@
 %%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 %%%
 %%%----------------------------------------------------------------------
-
-%%% IDEAS:
-%%%
-%%% * Implement those options, already present in mod_register:
-%%%   + access
-%%%   + captcha_protected
-%%%   + password_strength
-%%%   + welcome_message
-%%%   + registration_timeout
-%%%
-%%% * Improve this module to allow each virtual host to have different
-%%%   options. See http://support.process-one.net/browse/EJAB-561
-%%%
-%%% * Check that all the text is translatable.
-%%%
-%%% * Add option to use a custom CSS file, or custom CSS lines.
-%%%
-%%% * Don't hardcode the "register" path in URL.
-%%%
-%%% * Allow private email during register, and store in custom table.
-%%% * Optionally require private email to register.
-%%% * Optionally require email confirmation to register.
-%%% * Allow to set a private email address anytime.
-%%% * Allow to recover password using private email to confirm (mod_passrecover)
-%%% * Optionally require invitation
-%%% * Optionally register request is forwarded to admin, no account created.
 
 -module(mod_register_web).
 
@@ -88,12 +62,26 @@ depends(_Host, _Opts) ->
 %%% HTTP handlers
 %%%----------------------------------------------------------------------
 
-process([], #request{method = 'GET', lang = Lang}) ->
+process(Path, #request{raw_path = RawPath} = Request) ->
+    Continue = case Path of
+		   [E] ->
+		       binary:match(E, <<".">>) /= nomatch;
+		   _ ->
+		       false
+	       end,
+    case Continue orelse binary:at(RawPath, size(RawPath) - 1) == $/ of
+	true ->
+	    process2(Path, Request);
+	_ ->
+	    {301, [{<<"Location">>, <<RawPath/binary, "/">>}], <<>>}
+    end.
+
+process2([], #request{method = 'GET', lang = Lang}) ->
     index_page(Lang);
-process([<<"register.css">>],
+process2([<<"register.css">>],
 	#request{method = 'GET'}) ->
     serve_css();
-process([Section],
+process2([Section],
 	#request{method = 'GET', lang = Lang, host = Host,
 		 ip = {Addr, _Port}}) ->
     Host2 = case ejabberd_router:is_my_host(Host) of
@@ -108,10 +96,10 @@ process([Section],
 	<<"change_password">> -> form_changepass_get(Host2, Lang);
 	_ -> {404, [], "Not Found"}
     end;
-process([<<"new">>],
+process2([<<"new">>],
 	#request{method = 'POST', q = Q, ip = {Ip, _Port},
 		 lang = Lang, host = _HTTPHost}) ->
-    case form_new_post(Q) of
+    case form_new_post(Q, Ip) of
       {success, ok, {Username, Host, _Password}} ->
 	  Jid = jid:make(Username, Host),
           mod_register:send_registration_notifications(?MODULE, Jid, Ip),
@@ -123,7 +111,7 @@ process([<<"new">>],
                                 translate:translate(Lang, get_error_text(Error))]),
 	  {404, [], ErrorText}
     end;
-process([<<"delete">>],
+process2([<<"delete">>],
 	#request{method = 'POST', q = Q, lang = Lang,
 		 host = _HTTPHost}) ->
     case form_del_post(Q) of
@@ -138,7 +126,7 @@ process([<<"delete">>],
     end;
 %% TODO: Currently only the first vhost is usable. The web request record
 %% should include the host where the POST was sent.
-process([<<"change_password">>],
+process2([<<"change_password">>],
 	#request{method = 'POST', q = Q, lang = Lang,
 		 host = _HTTPHost}) ->
     case form_changepass_post(Q) of
@@ -152,7 +140,7 @@ process([<<"change_password">>],
 	  {404, [], ErrorText}
     end;
 
-process(_Path, _Request) ->
+process2(_Path, _Request) ->
     {404, [], "Not Found"}.
 
 %%%----------------------------------------------------------------------
@@ -316,10 +304,10 @@ form_new_get2(Host, Lang, CaptchaEls) ->
 %%% Formulary new POST
 %%%----------------------------------------------------------------------
 
-form_new_post(Q) ->
+form_new_post(Q, Ip) ->
     case catch get_register_parameters(Q) of
       [Username, Host, Password, Password, Id, Key] ->
-	  form_new_post(Username, Host, Password, {Id, Key});
+	  form_new_post(Username, Host, Password, {Id, Key}, Ip);
       [_Username, _Host, _Password, _Password2, false, false] ->
 	  {error, passwords_not_identical};
       [_Username, _Host, _Password, _Password2, Id, Key] ->
@@ -338,13 +326,12 @@ get_register_parameters(Q) ->
 	      [<<"username">>, <<"host">>, <<"password">>, <<"password2">>,
 	       <<"id">>, <<"key">>]).
 
-form_new_post(Username, Host, Password,
-	      {false, false}) ->
-    register_account(Username, Host, Password);
-form_new_post(Username, Host, Password, {Id, Key}) ->
+form_new_post(Username, Host, Password, {false, false}, Ip) ->
+    register_account(Username, Host, Password, Ip);
+form_new_post(Username, Host, Password, {Id, Key}, Ip) ->
     case ejabberd_captcha:check_captcha(Id, Key) of
       captcha_valid ->
-	  register_account(Username, Host, Password);
+	  register_account(Username, Host, Password, Ip);
       captcha_non_valid -> {error, captcha_non_valid};
       captcha_not_found -> {error, captcha_non_valid}
     end.
@@ -528,24 +515,27 @@ form_del_get(Host, Lang) ->
       {<<"Content-Type">>, <<"text/html">>}],
      ejabberd_web:make_xhtml(HeadEls, Els)}.
 
-%% @spec(Username, Host, Password) -> {success, ok, {Username, Host, Password} |
+%% @spec(Username, Host, Password, Ip) -> {success, ok, {Username, Host, Password} |
 %%                                    {success, exists, {Username, Host, Password}} |
 %%                                    {error, not_allowed} |
 %%                                    {error, invalid_jid}
-register_account(Username, Host, Password) ->
-    Access = mod_register_opt:access(Host),
-    case jid:make(Username, Host) of
-      error -> {error, invalid_jid};
-      JID ->
-        case acl:match_rule(Host, Access, JID) of
-          deny -> {error, not_allowed};
-          allow -> register_account2(Username, Host, Password)
-        end
+register_account(Username, Host, Password, Ip) ->
+    try mod_register_opt:access(Host) of
+	Access ->
+	    case jid:make(Username, Host) of
+		error -> {error, invalid_jid};
+		JID ->
+		    case acl:match_rule(Host, Access, JID) of
+			deny -> {error, not_allowed};
+			allow -> register_account2(Username, Host, Password, Ip)
+		    end
+	    end
+    catch _:{module_not_loaded, mod_register, _Host} ->
+	    {error, host_unknown}
     end.
 
-register_account2(Username, Host, Password) ->
-    case ejabberd_auth:try_register(Username, Host,
-				    Password)
+register_account2(Username, Host, Password, Ip) ->
+    case mod_register:try_register(Username, Host, Password, Ip, ?MODULE)
 	of
       ok ->
 	  {success, ok, {Username, Host, Password}};
@@ -601,10 +591,8 @@ get_error_text({error, exists}) ->
     ?T("The account already exists");
 get_error_text({error, password_incorrect}) ->
     ?T("Incorrect password");
-get_error_text({error, invalid_jid}) ->
-    ?T("The username is not valid");
-get_error_text({error, not_allowed}) ->
-    ?T("Not allowed");
+get_error_text({error, host_unknown}) ->
+    ?T("Host unknown");
 get_error_text({error, account_doesnt_exist}) ->
     ?T("Account doesn't exist");
 get_error_text({error, account_exists}) ->
@@ -614,7 +602,9 @@ get_error_text({error, password_not_changed}) ->
 get_error_text({error, passwords_not_identical}) ->
     ?T("The passwords are different");
 get_error_text({error, wrong_parameters}) ->
-    ?T("Wrong parameters in the web formulary").
+    ?T("Wrong parameters in the web formulary");
+get_error_text({error, Why}) ->
+    mod_register:format_error(Why).
 
 mod_options(_) ->
     [].
@@ -625,13 +615,27 @@ mod_doc() ->
            ?T("- Register a new account on the server."), "",
            ?T("- Change the password from an existing account on the server."), "",
            ?T("- Unregister an existing account on the server."), "",
-	   ?T("This module supports CAPTCHA image to register a new account. "
-	      "To enable this feature, configure the options 'captcha\_cmd' "
-	      "and 'captcha\_url', which are documented in the section with "
-	      "top-level options."), "",
-	   ?T("As an example usage, the users of the host 'example.org' can "
-	      "visit the page: 'https://example.org:5281/register/' It is "
+	   ?T("This module supports http://../basic/#captcha[CAPTCHA] "
+              "to register a new account. "
+	      "To enable this feature, configure the "
+              "top-level _`captcha_cmd`_ and "
+	      "top-level _`captcha_url`_ options."), "",
+	   ?T("As an example usage, the users of the host 'localhost' can "
+	      "visit the page: 'https://localhost:5280/register/' It is "
 	      "important to include the last / character in the URL, "
 	      "otherwise the subpages URL will be incorrect."), "",
-           ?T("The module depends on 'mod_register' where all the configuration "
-              "is performed.")]}.
+           ?T("This module is enabled in 'listen' -> 'ejabberd_http' -> "
+              "http://../listen-options/#request-handlers[request_handlers], "
+              "no need to enable in 'modules'."),
+           ?T("The module depends on _`mod_register`_ where all the "
+              "configuration is performed.")],
+     example =>
+         ["listen:",
+          "  -",
+          "    port: 5280",
+          "    module: ejabberd_http",
+          "    request_handlers:",
+          "      /register: mod_register_web",
+          "",
+          "modules:",
+          "  mod_register: {}"]}.

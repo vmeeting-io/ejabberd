@@ -1,5 +1,5 @@
 %%%----------------------------------------------------------------------
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,6 +25,7 @@
 -export([match_rules/4, match_acls/3]).
 -export([access_rules_validator/0, access_validator/0]).
 -export([validator/1, validators/0]).
+-export([loaded_shared_roster_module/1]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
@@ -38,14 +39,14 @@
 -type acl_rule() :: {user, {binary(), binary()} | binary()} |
 		    {server, binary()} |
 		    {resource, binary()} |
-		    {user_regexp, {re:mp(), binary()} | re:mp()} |
-		    {server_regexp, re:mp()} |
-		    {resource_regexp, re:mp()} |
-		    {node_regexp, {re:mp(), re:mp()}} |
-		    {user_glob, {re:mp(), binary()} | re:mp()} |
-		    {server_glob, re:mp()} |
-		    {resource_glob, re:mp()} |
-		    {node_glob, {re:mp(), re:mp()}} |
+		    {user_regexp, {re_mp(), binary()} | re_mp()} |
+		    {server_regexp, re_mp()} |
+		    {resource_regexp, re_mp()} |
+		    {node_regexp, {re_mp(), re_mp()}} |
+		    {user_glob, {re_mp(), binary()} | re_mp()} |
+		    {server_glob, re_mp()} |
+		    {resource_glob, re_mp()} |
+		    {node_glob, {re_mp(), re_mp()}} |
 		    {shared_group, {binary(), binary()} | binary()} |
 		    {ip, ip_mask()}.
 -type access() :: [{action(), [access_rule()]}].
@@ -347,7 +348,7 @@ node_validator(UV, SV) ->
 %%%===================================================================
 %%% Aux
 %%%===================================================================
--spec match_regexp(iodata(), re:mp()) -> boolean().
+-spec match_regexp(iodata(), re_mp()) -> boolean().
 match_regexp(Data, RegExp) ->
     re:run(Data, RegExp) /= nomatch.
 

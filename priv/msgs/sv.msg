@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," har satt ämnet till: "}.
 {"A friendly name for the node","Ett vänligt namn for noden"}.
 {"Access denied by service policy","Åtkomst nekad enligt lokal policy"}.
@@ -106,7 +110,6 @@
 {"is now known as","är känd som"}.
 {"It is not allowed to send private messages of type \"groupchat\"","Det är inte tillåtet att skicka privata medelanden med typen \"groupchat\""}.
 {"It is not allowed to send private messages to the conference","Det är inte tillåtet att skicka privata medelanden till den här konferensen"}.
-{"It is not allowed to send private messages","Det ar inte tillåtet att skicka privata meddelanden"}.
 {"Jabber ID","Jabber ID"}.
 {"January","Januari"}.
 {"joins the room","joinar rummet"}.
@@ -125,7 +128,6 @@
 {"Make room persistent","Gör rummet permanent"}.
 {"Make room public searchable","Gör rummet publikt sökbart"}.
 {"March","Mars"}.
-{"Max # of items to persist","Högsta antal dataposter som sparas"}.
 {"Max payload size in bytes","Högsta innehållsstorlek i bytes"}.
 {"Maximum Number of Occupants","Maximalt antal av användare"}.
 {"May","Maj"}.

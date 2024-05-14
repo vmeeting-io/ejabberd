@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," zmienił temat na: "}.
 {"A friendly name for the node","Przyjazna nazwa węzła"}.
 {"A password is required to enter this room","Aby wejść do pokoju wymagane jest hasło"}.
@@ -155,7 +159,6 @@
 {"It is not allowed to send error messages to the room. The participant (~s) has sent an error message (~s) and got kicked from the room","Użytkownik nie może wysyłać wiadomości o błędach do pokoju. Użytkownik (~s) wysłał błąd (~s) i został wyrzucony z pokoju"}.
 {"It is not allowed to send private messages of type \"groupchat\"","Nie można wysyłać prywatnych wiadomości typu \"groupchat\""}.
 {"It is not allowed to send private messages to the conference","Nie wolno wysyłac prywatnych wiadomości na konferencję"}.
-{"It is not allowed to send private messages","Wysyłanie prywatnych wiadomości jest zabronione"}.
 {"Jabber ID","Jabber ID"}.
 {"January","Styczeń"}.
 {"joins the room","dołącza do pokoju"}.
@@ -177,7 +180,6 @@
 {"Make room public searchable","Pozwól wyszukiwać pokój"}.
 {"Malformed username","Nieprawidłowa nazwa użytkownika"}.
 {"March","Marzec"}.
-{"Max # of items to persist","Maksymalna liczba przechowywanych przedmiotów"}.
 {"Max payload size in bytes","Maksymalna wielkość powiadomienia w bajtach"}.
 {"Maximum Number of Occupants","Maksymalna liczba uczestników"}.
 {"May","Maj"}.

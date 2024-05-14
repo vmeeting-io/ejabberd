@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," a candjî l' tite a: "}.
 {"A friendly name for the node","On no uzeu-ahessåve pol nuk"}.
 {"A password is required to enter this room","I fåt dner on scret po poleur intrer dins cisse såle ci"}.
@@ -128,7 +132,6 @@
 {"It is not allowed to send error messages to the room. The participant (~s) has sent an error message (~s) and got kicked from the room","On n' pout nén evoyî des messaedjes d' aroke sol såle. Li pårticipan (~s) a-st evoyî on messaedje d' aroke (~s) ey a stî tapé foû."}.
 {"It is not allowed to send private messages of type \"groupchat\"","C' est nén possibe d' evoyî des messaedjes privés del sôre «groupchat»"}.
 {"It is not allowed to send private messages to the conference","On n' pout nén evoyî des messaedjes privés dins cisse conferince ci"}.
-{"It is not allowed to send private messages","Ci n' est nén permetou d' evoyî des messaedjes privés"}.
 {"Jabber ID","ID Jabber"}.
 {"January","djanvî"}.
 {"joins the room","arive sol såle"}.
@@ -149,7 +152,6 @@
 {"Make room persistent","Rinde li såle permaninte"}.
 {"Make room public searchable","Rinde li såle di berdelaedje cweråve publicmint"}.
 {"March","måss"}.
-{"Max # of items to persist","Nombe macsimoms di cayets permanints"}.
 {"Max payload size in bytes","Contnou macsimom en octets"}.
 {"Maximum Number of Occupants","Nombe macsimom di prezints"}.
 {"May","may"}.

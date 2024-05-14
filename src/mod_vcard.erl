@@ -5,7 +5,7 @@
 %%% Created :  2 Jan 2003 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -29,6 +29,7 @@
 
 -protocol({xep, 54, '1.2'}).
 -protocol({xep, 55, '1.3'}).
+-protocol({xep, 153, '1.1'}).
 
 -behaviour(gen_server).
 -behaviour(gen_mod).
@@ -403,7 +404,7 @@ vcard_iq_set(#iq{from = From, lang = Lang, sub_els = [VCard]} = IQ) ->
 vcard_iq_set(Acc) ->
     Acc.
 
--spec set_vcard(binary(), binary(), xmlel() | vcard_temp()) -> {error, badarg} | ok.
+-spec set_vcard(binary(), binary(), xmlel() | vcard_temp()) -> {error, badarg|binary()} | ok.
 set_vcard(User, LServer, VCARD) ->
     case jid:nodeprep(User) of
 	error ->
@@ -412,17 +413,21 @@ set_vcard(User, LServer, VCARD) ->
 	    VCardEl = xmpp:encode(VCARD),
 	    VCardSearch = make_vcard_search(User, LUser, LServer, VCardEl),
 	    Mod = gen_mod:db_mod(LServer, ?MODULE),
-	    Mod:set_vcard(LUser, LServer, VCardEl, VCardSearch),
-	    ets_cache:delete(?VCARD_CACHE, {LUser, LServer},
+            case Mod:set_vcard(LUser, LServer, VCardEl, VCardSearch) of
+                {atomic, ok} ->
+	            ets_cache:delete(?VCARD_CACHE, {LUser, LServer},
 			     cache_nodes(Mod, LServer)),
-	    ok
+                    ok;
+                {atomic, Error} ->
+                    {error, Error}
+            end
     end.
 
 -spec string2lower(binary()) -> binary().
 string2lower(String) ->
-    case stringprep:tolower(String) of
+    case stringprep:tolower_nofilter(String) of
       Lower when is_binary(Lower) -> Lower;
-      error -> str:to_lower(String)
+      error -> String
     end.
 
 -spec mk_tfield(binary(), binary(), binary()) -> xdata_field().
@@ -636,23 +641,23 @@ mod_doc() ->
            {db_type,
             #{value => "mnesia | sql | ldap",
               desc =>
-                  ?T("Same as top-level 'default_db' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`default_db`_ option, but applied to this module only.")}},
            {use_cache,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'use_cache' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`use_cache`_ option, but applied to this module only.")}},
            {cache_size,
             #{value => "pos_integer() | infinity",
               desc =>
-                  ?T("Same as top-level 'cache_size' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_size`_ option, but applied to this module only.")}},
            {cache_missed,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'cache_missed' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_missed`_ option, but applied to this module only.")}},
            {cache_life_time,
             #{value => "timeout()",
               desc =>
-                  ?T("Same as top-level 'cache_life_time' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_life_time`_ option, but applied to this module only.")}},
            {vcard,
             #{value => ?T("vCard"),
               desc =>

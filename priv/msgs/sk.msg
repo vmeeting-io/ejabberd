@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: ","zmenil(a) tému na: "}.
 {"A friendly name for the node","Prístupný názov pre uzol"}.
 {"A password is required to enter this room","Pre vstup do miestnosti je potrebné heslo"}.
@@ -120,7 +124,6 @@
 {"is now known as","sa premenoval(a) na"}.
 {"It is not allowed to send private messages of type \"groupchat\"","Nie je dovolené odoslanie súkromnej správy typu \"Skupinová správa\" "}.
 {"It is not allowed to send private messages to the conference","Nie je povolené odosielať súkromné správy do konferencie"}.
-{"It is not allowed to send private messages","Nieje povolené posielať súkromné správy"}.
 {"Jabber ID","Jabber ID"}.
 {"January","Január"}.
 {"joins the room","vstúpil(a) do miestnosti"}.
@@ -140,7 +143,6 @@
 {"Make room persistent","Nastaviť miestnosť ako trvalú"}.
 {"Make room public searchable","Nastaviť miestnosť ako verejne prehľadávateľnú"}.
 {"March","Marec"}.
-{"Max # of items to persist","Maximálny počet položiek, ktoré je možné natrvalo uložiť"}.
 {"Max payload size in bytes","Maximálny náklad v bajtoch"}.
 {"Maximum Number of Occupants","Počet účastníkov"}.
 {"May","Máj"}.

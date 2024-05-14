@@ -5,7 +5,7 @@
 %%% Created : 20 May 2008 by Badlop <badlop@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -28,13 +28,16 @@
 
 -export([generate_html_output/3]).
 -export([generate_md_output/3]).
+-export([generate_tags_md/1]).
 
 -include("ejabberd_commands.hrl").
 
 -define(RAW(V), if HTMLOutput -> fxml:crypt(iolist_to_binary(V)); true -> iolist_to_binary(V) end).
--define(TAG(N), if HTMLOutput -> [<<"<", ??N, "/>">>]; true -> md_tag(N, <<"">>) end).
--define(TAG(N, V), if HTMLOutput -> [<<"<", ??N, ">">>, V, <<"</", ??N, ">">>]; true -> md_tag(N, V) end).
--define(TAG(N, C, V), if HTMLOutput -> [<<"<", ??N, " class='", C, "'>">>, V, <<"</", ??N, ">">>]; true -> md_tag(N, V) end).
+-define(TAG_BIN(N), (atom_to_binary(N, latin1))/binary).
+-define(TAG_STR(N), atom_to_list(N)).
+-define(TAG(N), if HTMLOutput -> [<<"<", ?TAG_BIN(N), "/>">>]; true -> md_tag(N, <<"">>) end).
+-define(TAG(N, V), if HTMLOutput -> [<<"<", ?TAG_BIN(N), ">">>, V, <<"</", ?TAG_BIN(N), ">">>]; true -> md_tag(N, V) end).
+-define(TAG(N, C, V), if HTMLOutput -> [<<"<", ?TAG_BIN(N), " class='", C, "'>">>, V, <<"</", ?TAG_BIN(N), ">">>]; true -> md_tag(N, V) end).
 -define(TAG_R(N, V), ?TAG(N, ?RAW(V))).
 -define(TAG_R(N, C, V), ?TAG(N, C, ?RAW(V))).
 -define(SPAN(N, V), ?TAG_R(span, ??N, V)).
@@ -83,6 +86,8 @@ md_tag(h2, V) ->
     [<<"\n__">>, V, <<"__\n\n">>];
 md_tag(strong, V) ->
     [<<"*">>, V, <<"*">>];
+md_tag('div', V) ->
+    [<<"<div class='note-down'>">>, V, <<"</div>">>];
 md_tag(_, V) ->
     V.
 
@@ -358,8 +363,16 @@ gen_param(Name, Type, Desc, HTMLOutput) ->
     [?TAG(dt, [?TAG_R(strong, atom_to_list(Name)), <<" :: ">>, ?RAW(format_type(Type))]),
      ?TAG(dd, ?RAW(Desc))].
 
-gen_doc(#ejabberd_commands{name=Name, tags=_Tags, desc=Desc, longdesc=LongDesc,
-                           args=Args, args_desc=ArgsDesc,
+make_tags(HTMLOutput) ->
+    TagsList = ejabberd_commands:get_tags_commands(1000000),
+    lists:map(fun(T) -> gen_tags(T, HTMLOutput) end, TagsList).
+
+-dialyzer({no_match, gen_tags/2}).
+gen_tags({TagName, Commands}, HTMLOutput) ->
+    [?TAG(h1, TagName) | [?TAG(p, ?RAW("* *`"++C++"`*")) || C <- Commands]].
+
+gen_doc(#ejabberd_commands{name=Name, tags=Tags, desc=Desc, longdesc=LongDesc,
+                           args=Args, args_desc=ArgsDesc, note=Note, definer=Definer,
                            result=Result, result_desc=ResultDesc}=Cmd, HTMLOutput, Langs) ->
     try
         ArgsText = case ArgsDesc of
@@ -373,7 +386,7 @@ gen_doc(#ejabberd_commands{name=Name, tags=_Tags, desc=Desc, longdesc=LongDesc,
         ResultText = case Result of
                        {res,rescode} ->
                            [?TAG(dl, [gen_param(res, integer,
-                                                "Status code (0 on success, 1 otherwise)",
+                                                "Status code (`0` on success, `1` otherwise)",
                                                 HTMLOutput)])];
                        {res,restuple} ->
                            [?TAG(dl, [gen_param(res, string,
@@ -387,15 +400,38 @@ gen_doc(#ejabberd_commands{name=Name, tags=_Tags, desc=Desc, longdesc=LongDesc,
                                  [?TAG(dl, [gen_param(RName, Type, ResultDesc, HTMLOutput)])]
                            end
                      end,
+        TagsText = ?RAW(string:join(["*`"++atom_to_list(Tag)++"`*" || Tag <- Tags], ", ")),
+        IsDefinerMod = case Definer of
+                         unknown -> false;
+                         _ -> lists:member(gen_mod, proplists:get_value(behaviour, Definer:module_info(attributes)))
+                     end,
+        ModuleText = case IsDefinerMod of
+                       true ->
+                           [?TAG(h2, <<"Module:">>), ?TAG(p, ?RAW("*`"++atom_to_list(Definer)++"`*"))];
+                       false ->
+                           []
+                   end,
+        NoteEl = case Note of
+                       "" -> [];
+                       _ -> ?TAG('div', "note-down", ?RAW(Note))
+                   end,
+        {NotePre, NotePost} =
+        if HTMLOutput -> {[], NoteEl};
+            true -> {NoteEl, []}
+        end,
 
-        [?TAG(h1, atom_to_list(Name)),
+        [NotePre,
+         ?TAG(h1, atom_to_list(Name)),
          ?TAG(p, ?RAW(Desc)),
          case LongDesc of
              "" -> [];
              _ -> ?TAG(p, ?RAW(LongDesc))
          end,
+         NotePost,
          ?TAG(h2, <<"Arguments:">>), ArgsText,
          ?TAG(h2, <<"Result:">>), ResultText,
+         ?TAG(h2, <<"Tags:">>), ?TAG(p, TagsText)]
+         ++ ModuleText ++ [
          ?TAG(h2, <<"Examples:">>), gen_calls(Cmd, HTMLOutput, Langs)]
     catch
 	_:Ex ->
@@ -405,23 +441,17 @@ gen_doc(#ejabberd_commands{name=Name, tags=_Tags, desc=Desc, longdesc=LongDesc,
     end.
 
 find_commands_definitions() ->
-    case code:lib_dir(ejabberd, ebin) of
-        {error, _} ->
-            lists:map(fun({N, _, _}) ->
-                              ejabberd_commands:get_command_definition(N)
-                      end, ejabberd_commands:list_commands());
-        Path ->
-            lists:flatmap(fun(P) ->
-                                  Mod = list_to_atom(filename:rootname(P)),
-                                  code:ensure_loaded(Mod),
-                                  case erlang:function_exported(Mod, get_commands_spec, 0) of
-                                      true ->
-                                          apply(Mod, get_commands_spec, []);
-                                      _ ->
-                                          []
-                                  end
-                          end, filelib:wildcard("*.beam", Path))
-    end.
+    lists:flatmap(
+        fun(Mod) ->
+            code:ensure_loaded(Mod),
+            Cs = case erlang:function_exported(Mod, get_commands_spec, 0) of
+                     true ->
+                         apply(Mod, get_commands_spec, []);
+                     _ ->
+                         []
+                 end,
+            [C#ejabberd_commands{definer = Mod} || C <- Cs]
+        end, ejabberd_config:beams(all)).
 
 generate_html_output(File, RegExp, Languages) ->
     Cmds = find_commands_definitions(),
@@ -442,13 +472,21 @@ generate_html_output(File, RegExp, Languages) ->
     ok.
 
 maybe_add_policy_arguments(#ejabberd_commands{args=Args1, policy=user}=Cmd) ->
-    Args2 = [{user, binary}, {server, binary} | Args1],
+    Args2 = [{user, binary}, {host, binary} | Args1],
     Cmd#ejabberd_commands{args = Args2};
 maybe_add_policy_arguments(Cmd) ->
     Cmd.
 
+generate_md_output(File, <<"runtime">>, Languages) ->
+    Cmds = lists:map(fun({N, _, _}) ->
+                             ejabberd_commands:get_command_definition(N)
+                     end, ejabberd_commands:list_commands()),
+    generate_md_output(File, <<".">>, Languages, Cmds);
 generate_md_output(File, RegExp, Languages) ->
     Cmds = find_commands_definitions(),
+    generate_md_output(File, RegExp, Languages, Cmds).
+
+generate_md_output(File, RegExp, Languages, Cmds) ->
     {ok, RE} = re:compile(RegExp),
     Cmds2 = lists:filter(fun(#ejabberd_commands{name=Name, module=Module}) ->
                                  re:run(atom_to_list(Name), RE, [{capture, none}]) == match orelse
@@ -459,12 +497,22 @@ generate_md_output(File, RegExp, Languages) ->
                        end, Cmds2),
     Cmds4 = [maybe_add_policy_arguments(Cmd) || Cmd <- Cmds3],
     Langs = binary:split(Languages, <<",">>, [global]),
-    Header = <<"---\ntitle: Administration API reference\ntoc: true\nmenu: Administration API\norder: 40\n"
+    Header = <<"---\ntitle: Administration API reference\ntoc: true\nmenu: API Reference\norder: 1\n"
 	    "// Autogenerated with 'ejabberdctl gen_markdown_doc_for_commands'\n---\n\n"
-	    "This section describes API of ejabberd version ", (ejabberd_option:version())/binary>>,
+	    "This section describes API of ejabberd.\n">>,
     Out = lists:map(fun(C) -> gen_doc(C, false, Langs) end, Cmds4),
     {ok, Fh} = file:open(File, [write]),
     io:format(Fh, "~ts~ts", [Header, Out]),
+    file:close(Fh),
+    ok.
+
+generate_tags_md(File) ->
+    Header = <<"---\ntitle: API Tags\ntoc: true\nmenu: API Tags\norder: 2\n"
+	    "// Autogenerated with 'ejabberdctl gen_markdown_doc_for_tags'\n---\n\n"
+	    "This section enumerates the tags and their associated API.\n">>,
+    Tags = make_tags(false),
+    {ok, Fh} = file:open(File, [write]),
+    io:format(Fh, "~ts~ts", [Header, Tags]),
     file:close(Fh),
     ok.
 

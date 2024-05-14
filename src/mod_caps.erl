@@ -5,7 +5,7 @@
 %%% Created : 7 Oct 2006 by Magnus Henoch <henoch@dtek.chalmers.se>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -49,7 +49,8 @@
 	 handle_cast/2, terminate/2, code_change/3]).
 
 -export([user_send_packet/1, user_receive_packet/1,
-	 c2s_presence_in/2, mod_opt_type/1, mod_options/1, mod_doc/0]).
+	 c2s_presence_in/2, c2s_copy_session/2,
+	 mod_opt_type/1, mod_options/1, mod_doc/0]).
 
 -include("logger.hrl").
 
@@ -226,41 +227,60 @@ disco_info(Acc, _, _, _Node, _Lang) ->
 -spec c2s_presence_in(ejabberd_c2s:state(), presence()) -> ejabberd_c2s:state().
 c2s_presence_in(C2SState,
 		#presence{from = From, to = To, type = Type} = Presence) ->
-    {Subscription, _, _} = ejabberd_hooks:run_fold(
-			     roster_get_jid_info, To#jid.lserver,
-			     {none, none, []},
-			     [To#jid.luser, To#jid.lserver, From]),
     ToSelf = (From#jid.luser == To#jid.luser)
-	       and (From#jid.lserver == To#jid.lserver),
-    Insert = (Type == available)
-	       and ((Subscription == both) or (Subscription == from) or ToSelf),
-    Delete = (Type == unavailable) or (Type == error),
-    if Insert or Delete ->
-	   LFrom = jid:tolower(From),
-	   Rs = maps:get(caps_resources, C2SState, gb_trees:empty()),
-	   Caps = read_caps(Presence),
-	   NewRs = case Caps of
-		     nothing when Insert == true -> Rs;
-		     _ when Insert == true ->
-			 case gb_trees:lookup(LFrom, Rs) of
-			   {value, Caps} -> Rs;
-			   none ->
-				ejabberd_hooks:run(caps_add, To#jid.lserver,
-						   [From, To,
-						    get_features(To#jid.lserver, Caps)]),
-				gb_trees:insert(LFrom, Caps, Rs);
-			   _ ->
-				ejabberd_hooks:run(caps_update, To#jid.lserver,
-						   [From, To,
-						    get_features(To#jid.lserver, Caps)]),
-				gb_trees:update(LFrom, Caps, Rs)
-			 end;
-		     _ -> gb_trees:delete_any(LFrom, Rs)
-		   end,
-	    C2SState#{caps_resources => NewRs};
-       true ->
-	    C2SState
+	       andalso (From#jid.lserver == To#jid.lserver),
+    Caps = read_caps(Presence),
+    Operation =
+    case {Type, ToSelf, Caps} of
+	{unavailable, _, _} -> delete;
+	{error, _, _} -> delete;
+	{available, _, nothing} -> skip;
+	{available, true, _} -> insert;
+	{available, _, _} ->
+	    {Subscription, _, _} = ejabberd_hooks:run_fold(
+		roster_get_jid_info, To#jid.lserver,
+		{none, none, []},
+		[To#jid.luser, To#jid.lserver, From]),
+	    case Subscription of
+		from -> insert;
+		both -> insert;
+		_ -> skip
+	    end;
+	_ ->
+	    skip
+    end,
+    case Operation of
+	skip ->
+	    C2SState;
+	delete ->
+	    LFrom = jid:tolower(From),
+	    Rs = maps:get(caps_resources, C2SState, gb_trees:empty()),
+	    C2SState#{caps_resources => gb_trees:delete_any(LFrom, Rs)};
+	insert ->
+	    LFrom = jid:tolower(From),
+	    Rs = maps:get(caps_resources, C2SState, gb_trees:empty()),
+	    NewRs = case gb_trees:lookup(LFrom, Rs) of
+			{value, Caps} -> Rs;
+			none ->
+			    ejabberd_hooks:run(caps_add, To#jid.lserver,
+					       [From, To,
+						get_features(To#jid.lserver, Caps)]),
+			    gb_trees:insert(LFrom, Caps, Rs);
+			_ ->
+			    ejabberd_hooks:run(caps_update, To#jid.lserver,
+					       [From, To,
+						get_features(To#jid.lserver, Caps)]),
+			    gb_trees:update(LFrom, Caps, Rs)
+		    end,
+	    C2SState#{caps_resources => NewRs}
     end.
+
+-spec c2s_copy_session(ejabberd_c2s:state(), ejabberd_c2s:state())
+      -> ejabberd_c2s:state().
+c2s_copy_session(C2SState, #{caps_resources := Rs}) ->
+    C2SState#{caps_resources => Rs};
+c2s_copy_session(C2SState, _) ->
+    C2SState.
 
 -spec depends(binary(), gen_mod:opts()) -> [{module(), hard | soft}].
 depends(_Host, _Opts) ->
@@ -292,6 +312,8 @@ init([Host|_]) ->
 		       caps_stream_features, 75),
     ejabberd_hooks:add(s2s_in_post_auth_features, Host, ?MODULE,
 		       caps_stream_features, 75),
+    ejabberd_hooks:add(c2s_copy_session, Host, ?MODULE,
+		       c2s_copy_session, 75),
     ejabberd_hooks:add(disco_local_features, Host, ?MODULE,
 		       disco_features, 75),
     ejabberd_hooks:add(disco_local_identity, Host, ?MODULE,
@@ -329,6 +351,8 @@ terminate(_Reason, State) ->
 			  ?MODULE, caps_stream_features, 75),
     ejabberd_hooks:delete(s2s_in_post_auth_features, Host,
 			  ?MODULE, caps_stream_features, 75),
+    ejabberd_hooks:delete(c2s_copy_session, Host, ?MODULE,
+			  c2s_copy_session, 75),
     ejabberd_hooks:delete(disco_local_features, Host,
 			  ?MODULE, disco_features, 75),
     ejabberd_hooks:delete(disco_local_identity, Host,
@@ -583,25 +607,25 @@ mod_doc() ->
               "https://xmpp.org/extensions/xep-0115.html"
               "[XEP-0115: Entity Capabilities]."),
            ?T("The main purpose of the module is to provide "
-              "PEP functionality (see 'mod_pubsub').")],
+              "PEP functionality (see _`mod_pubsub`_).")],
       opts =>
           [{db_type,
             #{value => "mnesia | sql",
               desc =>
-                  ?T("Same as top-level 'default_db' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`default_db`_ option, but applied to this module only.")}},
            {use_cache,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'use_cache' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`use_cache`_ option, but applied to this module only.")}},
            {cache_size,
             #{value => "pos_integer() | infinity",
               desc =>
-                  ?T("Same as top-level 'cache_size' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_size`_ option, but applied to this module only.")}},
            {cache_missed,
             #{value => "true | false",
               desc =>
-                  ?T("Same as top-level 'cache_missed' option, but applied to this module only.")}},
+                  ?T("Same as top-level _`cache_missed`_ option, but applied to this module only.")}},
            {cache_life_time,
             #{value => "timeout()",
               desc =>
-                  ?T("Same as top-level 'cache_life_time' option, but applied to this module only.")}}]}.
+                  ?T("Same as top-level _`cache_life_time`_ option, but applied to this module only.")}}]}.

@@ -5,7 +5,7 @@
 %%% Created : 25 Dec 2016 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -45,21 +45,13 @@
 %%%===================================================================
 %%% Callbacks and hooks
 %%%===================================================================
-start(Host, _Opts) ->
-    ejabberd_hooks:add(user_receive_packet, Host,
-                       ?MODULE, filter_packet, 25),
-    ejabberd_hooks:add(roster_in_subscription, Host,
-		       ?MODULE, filter_subscription, 25),
-    ejabberd_hooks:add(offline_message_hook, Host,
-		       ?MODULE, filter_offline_msg, 25).
+start(_Host, _Opts) ->
+    {ok, [{hook, user_receive_packet, filter_packet, 25},
+          {hook, roster_in_subscription, filter_subscription, 25},
+          {hook, offline_message_hook, filter_offline_msg, 25}]}.
 
-stop(Host) ->
-    ejabberd_hooks:delete(user_receive_packet, Host,
-                          ?MODULE, filter_packet, 25),
-    ejabberd_hooks:delete(roster_in_subscription, Host,
-			  ?MODULE, filter_subscription, 25),
-    ejabberd_hooks:delete(offline_message_hook, Host,
-			  ?MODULE, filter_offline_msg, 25).
+stop(_Host) ->
+    ok.
 
 reload(_Host, _NewOpts, _OldOpts) ->
     ok.
@@ -208,9 +200,10 @@ need_check(Pkt) ->
 		  _ ->
 		      false
 	      end,
+    IsError = (error == xmpp:get_type(Pkt)),
     AllowLocalUsers = mod_block_strangers_opt:allow_local_users(LServer),
     Access = mod_block_strangers_opt:access(LServer),
-    not (IsSelf orelse IsEmpty
+    not (IsSelf orelse IsEmpty orelse IsError
 	 orelse acl:match_rule(LServer, Access, From) == allow
 	 orelse ((AllowLocalUsers orelse From#jid.luser == <<"">>)
 		 andalso ejabberd_router:is_my_host(From#jid.lserver))).
@@ -263,7 +256,7 @@ mod_options(_) ->
 
 mod_doc() ->
     #{desc =>
-          ?T("This module allows to block/log messages coming from an "
+          ?T("This module blocks and logs any messages coming from an "
              "unknown entity. If a writing entity is not in your roster, "
              "you can let this module drop and/or log the message. "
              "By default you'll just not receive message from that entity. "
@@ -308,6 +301,6 @@ mod_doc() ->
               desc =>
                   ?T("Whether to generate CAPTCHA or not in response to "
                      "messages from strangers. See also section "
-                     "https://docs.ejabberd.im/admin/configuration/#captcha"
+                     "http://../#captcha"
                      "[CAPTCHA] of the Configuration Guide. "
                      "The default value is 'false'.")}}]}.

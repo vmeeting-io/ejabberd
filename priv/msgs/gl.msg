@@ -1,4 +1,8 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," puxo o asunto: "}.
 {"A friendly name for the node","Un nome sinxelo para o nodo"}.
 {"A password is required to enter this room","Necesítase contrasinal para entrar nesta sala"}.
@@ -155,7 +159,6 @@
 {"It is not allowed to send error messages to the room. The participant (~s) has sent an error message (~s) and got kicked from the room","Non está permitido enviar mensaxes de erro á sala. Este participante (~s) enviou unha mensaxe de erro (~s) e foi expulsado da sala"}.
 {"It is not allowed to send private messages of type \"groupchat\"","Non está permitido enviar mensaxes privadas do tipo \"groupchat\""}.
 {"It is not allowed to send private messages to the conference","Impedir o envio de mensaxes privadas á sala"}.
-{"It is not allowed to send private messages","Non está permitido enviar mensaxes privadas"}.
 {"Jabber ID","Jabber ID"}.
 {"January","Xaneiro"}.
 {"joins the room","entra na sala"}.
@@ -177,7 +180,6 @@
 {"Make room public searchable","Sala publicamente visible"}.
 {"Malformed username","Nome de usuario mal formado"}.
 {"March","Marzo"}.
-{"Max # of items to persist","Máximo # de elementos que persisten"}.
 {"Max payload size in bytes","Máximo tamaño do payload en bytes"}.
 {"Maximum Number of Occupants","Número máximo de ocupantes"}.
 {"May","Maio"}.

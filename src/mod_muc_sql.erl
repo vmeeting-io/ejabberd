@@ -4,7 +4,7 @@
 %%% Created : 13 Apr 2016 by Evgeny Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -29,16 +29,20 @@
 -behaviour(mod_muc_room).
 
 %% API
--export([init/2, store_room/5, restore_room/3, forget_room/3,
+-export([init/2, store_room/5, store_changes/4,
+         restore_room/3, forget_room/3,
 	 can_use_nick/4, get_rooms/2, get_nick/3, set_nick/4,
 	 import/3, export/1]).
 -export([register_online_room/4, unregister_online_room/4, find_online_room/3,
 	 get_online_rooms/3, count_online_rooms/2, rsm_supported/0,
 	 register_online_user/4, unregister_online_user/4,
 	 count_online_rooms_by_user/3, get_online_rooms_by_user/3,
-	 get_subscribed_rooms/3, get_rooms_without_subscribers/2]).
+	 get_subscribed_rooms/3, get_rooms_without_subscribers/2,
+	 get_hibernated_rooms_older_than/3,
+	 find_online_room_by_pid/2, remove_user/2]).
 -export([set_affiliation/6, set_affiliations/4, get_affiliation/5,
 	 get_affiliations/3, search_affiliation/4]).
+-export([sql_schemas/0]).
 
 -include_lib("xmpp/include/jid.hrl").
 -include("mod_muc.hrl").
@@ -49,6 +53,7 @@
 %%% API
 %%%===================================================================
 init(Host, Opts) ->
+    ejabberd_sql_schema:update_schema(Host, ?MODULE, sql_schemas()),
     case gen_mod:ram_db_mod(Opts, mod_muc) of
 	?MODULE ->
 	    clean_tables(Host);
@@ -56,19 +61,101 @@ init(Host, Opts) ->
 	    ok
     end.
 
+sql_schemas() ->
+    [#sql_schema{
+        version = 1,
+        tables =
+            [#sql_table{
+                name = <<"muc_room">>,
+                columns =
+                    [#sql_column{name = <<"name">>, type = text},
+                     #sql_column{name = <<"host">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"opts">>, type = {text, big}},
+                     #sql_column{name = <<"created_at">>, type = timestamp,
+                                 default = true}],
+                indices = [#sql_index{
+                              columns = [<<"name">>, <<"host">>],
+                              unique = true},
+                           #sql_index{
+                              columns = [<<"host">>, <<"created_at">>]}]},
+             #sql_table{
+                name = <<"muc_registered">>,
+                columns =
+                    [#sql_column{name = <<"jid">>, type = text},
+                     #sql_column{name = <<"host">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"nick">>, type = text},
+                     #sql_column{name = <<"created_at">>, type = timestamp,
+                                 default = true}],
+                indices = [#sql_index{
+                              columns = [<<"jid">>, <<"host">>],
+                              unique = true},
+                           #sql_index{
+                              columns = [<<"nick">>]}]},
+             #sql_table{
+                name = <<"muc_online_room">>,
+                columns =
+                    [#sql_column{name = <<"name">>, type = text},
+                     #sql_column{name = <<"host">>, type = text},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"node">>, type = text},
+                     #sql_column{name = <<"pid">>, type = text}],
+                indices = [#sql_index{
+                              columns = [<<"name">>, <<"host">>],
+                              unique = true}]},
+             #sql_table{
+                name = <<"muc_online_users">>,
+                columns =
+                    [#sql_column{name = <<"username">>, type = text},
+                     #sql_column{name = <<"server">>, type = {text, 75}},
+                     #sql_column{name = <<"resource">>, type = text},
+                     #sql_column{name = <<"name">>, type = text},
+                     #sql_column{name = <<"host">>, type = {text, 75}},
+                     #sql_column{name = <<"server_host">>, type = text},
+                     #sql_column{name = <<"node">>, type = text}],
+                indices = [#sql_index{
+                              columns = [<<"username">>, <<"server">>,
+                                         <<"resource">>, <<"name">>,
+                                         <<"host">>],
+                              unique = true}]},
+             #sql_table{
+                name = <<"muc_room_subscribers">>,
+                columns =
+                    [#sql_column{name = <<"room">>, type = text},
+                     #sql_column{name = <<"host">>, type = text},
+                     #sql_column{name = <<"jid">>, type = text},
+                     #sql_column{name = <<"nick">>, type = text},
+                     #sql_column{name = <<"nodes">>, type = text},
+                     #sql_column{name = <<"created_at">>, type = timestamp,
+                                 default = true}],
+                indices = [#sql_index{
+                              columns = [<<"host">>, <<"room">>, <<"jid">>],
+                              unique = true},
+                           #sql_index{
+                              columns = [<<"host">>, <<"jid">>]},
+                           #sql_index{
+                              columns = [<<"jid">>]}]}]}].
+
 store_room(LServer, Host, Name, Opts, ChangesHints) ->
     {Subs, Opts2} = case lists:keytake(subscribers, 1, Opts) of
 			{value, {subscribers, S}, OptN} -> {S, OptN};
 			_ -> {[], Opts}
 		    end,
     SOpts = misc:term_to_expr(Opts2),
+    Timestamp = case lists:keyfind(hibernation_time, 1, Opts) of
+		    false -> <<"1970-01-02 00:00:00">>;
+		    {_, undefined} -> <<"1970-01-02 00:00:00">>;
+		    {_, Time} -> usec_to_sql_timestamp(Time)
+		end,
     F = fun () ->
 		?SQL_UPSERT_T(
                    "muc_room",
                    ["!name=%(Name)s",
                     "!host=%(Host)s",
                     "server_host=%(LServer)s",
-                    "opts=%(SOpts)s"]),
+                    "opts=%(SOpts)s",
+		    "created_at=%(Timestamp)t"]),
                 case ChangesHints of
                     Changes when is_list(Changes) ->
                         [change_room(Host, Name, Change) || Change <- Changes];
@@ -79,6 +166,12 @@ store_room(LServer, Host, Name, Opts, ChangesHints) ->
                         [change_room(Host, Name, {add_subscription, JID, Nick, Nodes})
                          || {JID, Nick, Nodes} <- Subs]
                 end
+	end,
+    ejabberd_sql:sql_transaction(LServer, F).
+
+store_changes(LServer, Host, Name, Changes) ->
+    F = fun () ->
+                [change_room(Host, Name, Change) || Change <- Changes]
 	end,
     ejabberd_sql:sql_transaction(LServer, F).
 
@@ -144,13 +237,19 @@ forget_room(LServer, Host, Name) ->
 	end,
     ejabberd_sql:sql_transaction(LServer, F).
 
-can_use_nick(LServer, Host, JID, Nick) ->
+can_use_nick(LServer, ServiceOrRoom, JID, Nick) ->
     SJID = jid:encode(jid:tolower(jid:remove_resource(JID))),
-    case catch ejabberd_sql:sql_query(
-                 LServer,
-                 ?SQL("select @(jid)s from muc_registered "
-                      "where nick=%(Nick)s"
-                      " and host=%(Host)s")) of
+    SqlQuery = case (jid:decode(ServiceOrRoom))#jid.lserver of
+                   ServiceOrRoom ->
+                       ?SQL("select @(jid)s from muc_registered "
+                            "where nick=%(Nick)s"
+                            " and host=%(ServiceOrRoom)s");
+                   Service ->
+                       ?SQL("select @(jid)s from muc_registered "
+                            "where nick=%(Nick)s"
+                            " and (host=%(ServiceOrRoom)s or host=%(Service)s)")
+               end,
+    case catch ejabberd_sql:sql_query(LServer, SqlQuery) of
 	{selected, [{SJID1}]} -> SJID == SJID1;
 	_ -> true
     end.
@@ -160,6 +259,23 @@ get_rooms_without_subscribers(LServer, Host) ->
 	LServer,
 	?SQL("select @(name)s, @(opts)s from muc_room"
 	     " where host=%(Host)s")) of
+	{selected, RoomOpts} ->
+	    lists:map(
+		fun({Room, Opts}) ->
+		    OptsD = ejabberd_sql:decode_term(Opts),
+		    #muc_room{name_host = {Room, Host},
+			      opts = mod_muc:opts_to_binary(OptsD)}
+		end, RoomOpts);
+	_Err ->
+	    []
+    end.
+
+get_hibernated_rooms_older_than(LServer, Host, Timestamp) ->
+    TimestampS = usec_to_sql_timestamp(Timestamp),
+    case catch ejabberd_sql:sql_query(
+	LServer,
+	?SQL("select @(name)s, @(opts)s from muc_room"
+	     " where host=%(Host)s and created_at < %(TimestampS)t and created_at > '1970-01-02 00:00:00'")) of
 	{selected, RoomOpts} ->
 	    lists:map(
 		fun({Room, Opts}) ->
@@ -184,13 +300,20 @@ get_rooms(LServer, Host) ->
 		{selected, Subs} ->
 		    SubsD = lists:foldl(
 			fun({Room, Jid, Nick, Nodes}, Dict) ->
-			    dict:append(Room, {jid:decode(Jid),
-					       Nick, ejabberd_sql:decode_term(Nodes)}, Dict)
-			end, dict:new(), Subs),
+                                Sub = {jid:decode(Jid),
+                                       Nick, ejabberd_sql:decode_term(Nodes)},
+                                maps:update_with(
+                                  Room,
+                                  fun(SubAcc) ->
+                                          [Sub | SubAcc]
+                                  end,
+                                  [Sub],
+                                  Dict)
+			end, maps:new(), Subs),
 	    lists:map(
 	      fun({Room, Opts}) ->
 			    OptsD = ejabberd_sql:decode_term(Opts),
-			    OptsD2 = case {dict:find(Room, SubsD), lists:keymember(subscribers, 1, OptsD)} of
+			    OptsD2 = case {maps:find(Room, SubsD), lists:keymember(subscribers, 1, OptsD)} of
 					 {_, true} ->
 					     store_room(LServer, Host, Room, mod_muc:opts_to_binary(OptsD), undefined),
 					     OptsD;
@@ -219,28 +342,57 @@ get_nick(LServer, Host, From) ->
 	_ -> error
     end.
 
-set_nick(LServer, Host, From, Nick) ->
+set_nick(LServer, ServiceOrRoom, From, Nick) ->
     JID = jid:encode(jid:tolower(jid:remove_resource(From))),
     F = fun () ->
 		case Nick of
 		    <<"">> ->
 			ejabberd_sql:sql_query_t(
 			  ?SQL("delete from muc_registered where"
-                               " jid=%(JID)s and host=%(Host)s")),
+                               " jid=%(JID)s and host=%(ServiceOrRoom)s")),
 			ok;
 		    _ ->
-			Allow = case ejabberd_sql:sql_query_t(
-				       ?SQL("select @(jid)s from muc_registered"
-                                            " where nick=%(Nick)s"
-                                            " and host=%(Host)s")) of
-				    {selected, [{J}]} -> J == JID;
-				    _ -> true
+			Service = (jid:decode(ServiceOrRoom))#jid.lserver,
+                        SqlQuery = case (ServiceOrRoom == Service) of
+                                       true ->
+                                           ?SQL("select @(jid)s, @(host)s from muc_registered "
+                                                "where nick=%(Nick)s"
+                                                " and host=%(ServiceOrRoom)s");
+                                       false ->
+                                           ?SQL("select @(jid)s, @(host)s from muc_registered "
+                                                "where nick=%(Nick)s"
+                                                " and (host=%(ServiceOrRoom)s or host=%(Service)s)")
+                                   end,
+			Allow = case ejabberd_sql:sql_query_t(SqlQuery) of
+				    {selected, []}
+                                      when (ServiceOrRoom == Service) ->
+                                        %% Registering in the service...
+                                        %% check if nick is registered for some room in this service
+                                        {selected, NickRegistrations} =
+                                            ejabberd_sql:sql_query_t(
+                                              ?SQL("select @(jid)s, @(host)s from muc_registered "
+                                                   "where nick=%(Nick)s")),
+                                        not lists:any(fun({_NRJid, NRServiceOrRoom}) ->
+                                                              Service == (jid:decode(NRServiceOrRoom))#jid.lserver end,
+                                                      NickRegistrations);
+				    {selected, []} ->
+                                        %% Nick not registered in any service or room
+                                        true;
+				    {selected, [{_J, Host}]}
+                                      when (Host == Service) and (ServiceOrRoom /= Service) ->
+                                        %% Registering in a room, but the nick is already registered in the service
+                                        false;
+				    {selected, [{J, _Host}]} ->
+                                        %% Registering in room (or service) a nick that is
+                                        %% already registered in this room (or service)
+                                        %% Only the owner of this registration can use the nick
+                                        J == JID
 				end,
 			if Allow ->
 				?SQL_UPSERT_T(
                                   "muc_registered",
                                   ["!jid=%(JID)s",
-                                   "!host=%(Host)s",
+                                   "!host=%(ServiceOrRoom)s",
                                    "server_host=%(LServer)s",
                                    "nick=%(Nick)s"]),
 				ok;
@@ -300,6 +452,21 @@ find_online_room(ServerHost, Room, Host) ->
 	    try {ok, misc:decode_pid(PidS, NodeS)}
 	    catch _:{bad_node, _} -> error
 	    end;
+	{selected, []} ->
+	    error;
+	_Err ->
+	    error
+    end.
+
+find_online_room_by_pid(ServerHost, Pid) ->
+    PidS = misc:encode_pid(Pid),
+    NodeS = erlang:atom_to_binary(node(Pid), latin1),
+    case ejabberd_sql:sql_query(
+	ServerHost,
+	?SQL("select @(name)s, @(host)s from muc_online_room where "
+	     "node=%(NodeS)s and pid=%(PidS)s")) of
+	{selected, [{Room, Host}]} ->
+	    {ok, Room, Host};
 	{selected, []} ->
 	    error;
 	_Err ->
@@ -435,6 +602,13 @@ get_subscribed_rooms(LServer, Host, Jid) ->
 	    {error, db_failure}
     end.
 
+remove_user(LUser, LServer) ->
+    SJID = jid:encode(jid:make(LUser, LServer)),
+    ejabberd_sql:sql_query(
+      LServer,
+      ?SQL("delete from muc_room_subscribers where jid=%(SJID)s")),
+    ok.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -459,4 +633,13 @@ clean_tables(ServerHost) ->
 	Err2 ->
 	    ?ERROR_MSG("Failed to clean 'muc_online_users' table: ~p", [Err2]),
 	    Err2
+    end.
+
+usec_to_sql_timestamp(Timestamp) ->
+    TS = misc:usec_to_now(Timestamp),
+    case calendar:now_to_universal_time(TS) of
+	{{Year, Month, Day}, {Hour, Minute, Second}} ->
+	    list_to_binary(io_lib:format("~4..0B-~2..0B-~2..0B "
+					 "~2..0B:~2..0B:~2..0B",
+					 [Year, Month, Day, Hour, Minute, Second]))
     end.

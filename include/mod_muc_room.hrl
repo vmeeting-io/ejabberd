@@ -1,6 +1,6 @@
 %%%----------------------------------------------------------------------
 %%%
-%%% ejabberd, Copyright (C) 2002-2021   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2024   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -38,7 +38,7 @@
     description                          = <<"">> :: binary(),
     allow_change_subj                    = true :: boolean(),
     allow_query_users                    = true :: boolean(),
-    allow_private_messages               = true :: boolean(),
+    allowpm                              = anyone :: anyone | participants | moderators | none,
     allow_private_messages_from_visitors = anyone :: anyone | moderators | nobody ,
     allow_visitor_status                 = true :: boolean(),
     allow_visitor_nickchange             = true :: boolean(),
@@ -65,9 +65,10 @@
     captcha_whitelist                    = (?SETS):empty() :: gb_sets:set(),
     mam                                  = false :: boolean(),
     pubsub                               = <<"">> :: binary(),
-    lang                                 = ejabberd_option:language() :: binary(),
     meeting_id                           = <<"">> :: binary(),
     time_remained                        = -1 :: integer()
+    enable_hats                          = false :: boolean(),
+    lang                                 = ejabberd_option:language() :: binary()
 }).
 
 -type config() :: #config{}.
@@ -88,6 +89,16 @@
 -record(subscriber, {jid :: jid(),
 		     nick = <<>> :: binary(),
 		     nodes = [] :: [binary()]}).
+
+-record(muc_subscribers,
+        {subscribers             = #{} :: subscribers(),
+         subscriber_nicks        = #{} :: subscriber_nicks(),
+         subscriber_nodes        = #{} :: subscriber_nodes()
+        }).
+
+-type subscribers() :: #{ljid() => #subscriber{}}.
+-type subscriber_nicks() :: #{binary() => [ljid()]}.
+-type subscriber_nodes() :: #{binary() => subscribers()}.
 
 -record(activity,
 {
@@ -133,15 +144,16 @@
     jid                     = #jid{} :: jid(),
     config                  = #config{} :: config(),
     users                   = #{} :: users(),
-    subscribers             = #{} :: subscribers(),
-    subscriber_nicks        = #{} :: subscriber_nicks(),
+    muc_subscribers         = #muc_subscribers{} :: #muc_subscribers{},
     last_voice_request_time = treap:empty() :: treap:treap(),
     robots                  = #{} :: robots(),
     nicks                   = #{} :: nicks(),
     affiliations            = #{} :: affiliations(),
+    roles                   = #{} :: roles(),
     history                 = #lqueue{} :: lqueue(),
     subject                 = [] :: [text()],
-    subject_author          = <<"">> :: binary(),
+    subject_author          = {<<"">>, #jid{}} :: {binary(), jid()},
+    hats_users              = #{} :: map(), % FIXME on OTP 21+: #{ljid() => #{binary() => binary()}},
     just_created            = erlang:system_time(microsecond) :: true | integer(),
     activity                = treap:empty() :: treap:treap(),
     room_shaper             = none :: ejabberd_shaper:shaper(),
@@ -175,5 +187,4 @@
 -type robots() :: #{jid() => {binary(), stanza()}}.
 -type nicks() :: #{binary() => [ljid()]}.
 -type affiliations() :: #{ljid() => affiliation() | {affiliation(), binary()}}.
--type subscribers() :: #{ljid() => #subscriber{}}.
--type subscriber_nicks() :: #{binary() => [ljid()]}.
+-type roles() :: #{ljid() => role() | {role(), binary()}}.

@@ -1,11 +1,13 @@
-%% -*- coding: utf-8 -*-
+%% Generated automatically
+%% DO NOT EDIT: run `make translations` instead
+%% To improve translations please read:
+%%   https://docs.ejabberd.im/developer/extending-ejabberd/localization/
+
 {" has set the subject to: "," har satt emnet til: "}.
 {"A friendly name for the node","Et vennlig navn for noden"}.
 {"A password is required to enter this room","Et passord kreves for tilgang til samtalerommet"}.
 {"Accept","Godta"}.
 {"Access denied by service policy","Tilgang nektes på grunn av en tjenesteregel"}.
-{"Access model of presence","Tilgangsmodell for tilstedeværelse"}.
-{"Access model of roster","Tilgangsmodell for kontaktliste"}.
 {"Action on user","Handling på bruker"}.
 {"Add Jabber ID","Legg til Jabber-ID"}.
 {"Add New","Legg til ny"}.
@@ -137,7 +139,6 @@
 {"IP addresses","IP-adresser"}.
 {"is now known as","er nå kjent som"}.
 {"It is not allowed to send private messages to the conference","Det er ikke tillatt å sende private meldinger til konferansen"}.
-{"It is not allowed to send private messages","Det er ikke tillatt å sende private meldinger"}.
 {"Jabber ID","Jabber-ID"}.
 {"January","januar"}.
 {"JID normalization failed","JID-normalisering mislyktes"}.
@@ -161,7 +162,6 @@
 {"Make room persistent","Gjør rommet vedvarende"}.
 {"Make room public searchable","Gjør rommet offentlig søkbart"}.
 {"March","mars"}.
-{"Max # of items to persist","Høyeste # elementer som skal lagres"}.
 {"Maximum file size","Maksimal filstørrelse"}.
 {"Maximum Number of History Messages Returned by Room","Maksimalt antall historikkmeldinger tilbudt av rommet"}.
 {"May","mai"}.
@@ -329,7 +329,6 @@
 {"The query must not contain <item/> elements","Spørringen kan ikke inneholde <item/>-elementer"}.
 {"The room subject can be modified by participants","Romemnet kan endres av dets deltagere"}.
 {"The sender of the last received message","Avsender for sist mottatte melding"}.
-{"The username is not valid","Brukernavnet er ikke gyldig"}.
 {"There was an error creating the account: ","En feil inntraff under oppretting av kontoen: "}.
 {"There was an error deleting the account: ","En feil inntraff under sletting av kontoen: "}.
 {"This room is not anonymous","Dette rommet er ikke anonymt"}.
