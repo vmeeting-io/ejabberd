@@ -82,7 +82,7 @@ on_filter_message(#message{
     case vm_util:get_subtag_value(Packet#message.sub_els, <<"json-message">>) of
     Data when Data /= null ->
         DecodedData = jiffy:decode(Data, [return_maps]),
-        % ?INFO_MSG("decoded data: ~p", [DecodedData]),
+        ?INFO_MSG("decoded data: ~p", [DecodedData]),
         case maps:get(<<"type">>, DecodedData, none) of
         <<"timer-end-time">> ->
             EndTime    = maps:get(<<"timerEndTime">>,DecodedData),

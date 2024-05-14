@@ -23,14 +23,23 @@
 -include("logger.hrl").
 -include("mod_muc_room.hrl").
 
--spec find_nick_by_jid(jid(), mod_muc_room:state()) -> binary() | undefined.
+-type state() :: #state{}.
+
+-spec find_nick_by_jid(jid() | undefined, state()) -> binary().
+find_nick_by_jid(undefined, _StateData) ->
+    <<>>;
 find_nick_by_jid(JID, StateData) ->
     LJID = jid:tolower(JID),
-    try maps:get(LJID, StateData#state.users) of
-        #user{nick = Nick} -> Nick
-    catch
-        _:{badkey, _} -> undefined;
-        _:{badmap, _} -> undefined
+    case maps:find(LJID, StateData#state.users) of
+	{ok, #user{nick = Nick}} ->
+	    Nick;
+	_ ->
+	    case maps:find(LJID, (StateData#state.muc_subscribers)#muc_subscribers.subscribers) of
+		{ok, #subscriber{nick = Nick}} ->
+		    Nick;
+		_ ->
+		    <<>>
+	    end
     end.
 
 -spec is_healthcheck_room(binary()) -> boolean().

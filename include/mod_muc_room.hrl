@@ -66,7 +66,7 @@
     mam                                  = false :: boolean(),
     pubsub                               = <<"">> :: binary(),
     meeting_id                           = <<"">> :: binary(),
-    time_remained                        = -1 :: integer()
+    time_remained                        = -1 :: integer(),
     enable_hats                          = false :: boolean(),
     lang                                 = ejabberd_option:language() :: binary()
 }).

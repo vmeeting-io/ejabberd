@@ -44,7 +44,8 @@ defmodule Ejabberd.MixProject do
     [mod: {:ejabberd_app, []},
      applications: [:idna, :inets, :kernel, :sasl, :ssl, :stdlib, :mix,
                     :base64url, :fast_tls, :fast_xml, :fast_yaml, :jiffy, :jose,
-                    :p1_utils, :stringprep, :syntax_tools, :yconf]
+                    :p1_utils, :stringprep, :syntax_tools, :yconf,
+                    :uuid]
      ++ cond_apps(),
      included_applications: [:mnesia, :os_mon,
                              :cache_tab, :eimp, :mqtree, :p1_acme,
@@ -118,8 +119,9 @@ defmodule Ejabberd.MixProject do
      {:p1_utils, "~> 1.0"},
      {:pkix, "~> 1.0"},
      {:stringprep, ">= 1.0.26"},
-     {:xmpp, git: "https://github.com/vmeeting-io/xmpp", ref: "1e8a9dba4e7651213206086a1a896551c95672da", override: true},
-     {:yconf, "~> 1.0"}]
+     {:xmpp, git: "https://github.com/vmeeting-io/xmpp", ref: "666ee124898cce14f5910b341c56c0729700b4c5", override: true},
+     {:yconf, "~> 1.0"},
+     {:uuid, "~> 2.0", hex: :uuid_erl}]
     ++ cond_deps()
   end
 

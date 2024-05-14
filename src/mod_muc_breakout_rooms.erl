@@ -479,8 +479,7 @@ process_message(#message{
                 catch _:_ ->
                     ?WARNING_MSG("~ts state not found", [jid:to_string(MainRoomJid)])
                 end
-            catch _:_ -> ok end;
-        _ -> ok
+            catch _:_ -> ok end
         catch _:_ -> ok end,
         drop;
     _ ->

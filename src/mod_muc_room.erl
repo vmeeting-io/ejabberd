@@ -227,6 +227,11 @@ get_state(Pid) ->
 -spec set_state(pid(), state()) -> {ok, state()} | {error, notfound | timeout}.
 set_state(Pid, State) ->
     try p1_fsm:sync_send_all_state_event(Pid, {change_state, State})
+    catch _:{timeout, {p1_fsm, _, _}} ->
+	    {error, timeout};
+	  _:{_, {p1_fsm, _, _}} ->
+	    {error, notfound}
+    end.
 
 -spec get_info(pid()) -> {ok, #{occupants_number => integer()}} |
                          {error, notfound | timeout}.
@@ -391,12 +396,12 @@ init([Host, ServerHost, Access, Room, HistorySize,
 				  jid = Jid,
 				  room_queue = RoomQueue,
 				  room_shaper = Shaper}),
-    State1 = ejabberd_hooks:run_fold(vm_start_room, ServerHost, State, [ServerHost, Room, Host]),
-	store_room(State1),
+    State0 = ejabberd_hooks:run_fold(vm_start_room, ServerHost, State, [ServerHost, Room, Host]),
+	store_room(State0),
+    add_to_log(room_existence, started, State0),
     ?INFO_MSG("Started MUC room ~ts@~ts", [Room, Host]),
-    add_to_log(room_existence, started, State1),
     ejabberd_hooks:run(start_room, ServerHost, [ServerHost, Room, Host]),
-    State1 = cleanup_affiliations(State),
+    State1 = cleanup_affiliations(State0),
     State2 =
     case {lists:keyfind(hibernation_time, 1, Opts),
 	  (State1#state.config)#config.mam,
@@ -1149,7 +1154,7 @@ process_groupchat_message(#message{from = From, lang = Lang} = Packet, StateData
 	      end,
 	      case IsAllowed of
 		   	true ->
-		  		SendWrappedMultiple = func(NP, NS) ->
+		  		SendWrappedMultiple = fun(NP, NS) ->
 					NewPacket = xmpp:put_meta(xmpp:remove_subtag(
 						add_stanza_id(NP, StateData), #nick{}),
 						muc_sender_real_jid, From),
@@ -1993,15 +1998,16 @@ get_role(JID, StateData) ->
 
 -spec get_default_role(affiliation(), state()) -> role().
 get_default_role(Affiliation, StateData) ->
+	?INFO_MSG("get_default_role: ~p ~p ~p ~p", [StateData#state.host, Affiliation, (StateData#state.config)#config.members_only, (StateData#state.config)#config.members_by_default]),
     case Affiliation of
       owner -> moderator;
       admin -> moderator;
       member -> participant;
       outcast -> none;
       none ->
-	  case (StateData#state.config)#config.password_protected of
-		true -> none;
-		_ ->
+	%   case (StateData#state.config)#config.password_protected of
+	% 	true -> none;
+	% 	_ ->
 		case (StateData#state.config)#config.members_only of
 			true -> none;
 			_ ->
@@ -2011,7 +2017,7 @@ get_default_role(Affiliation, StateData) ->
 			_ -> visitor
 			end
 		end
-	  end
+	%   end
     end.
 
 -spec is_visitor(jid(), state()) -> boolean().
@@ -2418,7 +2424,9 @@ add_new_user(From, Nick, Packet, State) ->
     Collision = nick_collision(From, Nick, StateData),
     IsSubscribeRequest = not is_record(Packet, presence),
 	IsWhilelistUser = lists:member(From#jid.luser, ?WHITE_LIST_USERS) == true,
-	?INFO_MSG("add_new_user: ~ts ~ts ~p ~p ~p ~p ~p ~p ~p ~p", [ServerHost, jid:encode(From), ServiceAffiliation, Affiliation, NUsers, MaxUsers, MaxAdminUsers, IsWhilelistUser, NConferences, MaxConferences]),
+	% true: 암호모드 + 암호 일치 
+	IsPasswordMatch = (StateData#state.config)#config.password_protected andalso check_password(ServiceAffiliation, Affiliation, Packet, From, StateData),
+	?INFO_MSG("add_new_user: ~ts ~ts ~p ~p ~p ~p ~p ~p ~p ~p ~p", [ServerHost, jid:encode(From), ServiceAffiliation, Affiliation, NUsers, MaxUsers, MaxAdminUsers, IsWhilelistUser, NConferences, MaxConferences, IsPasswordMatch]),
     case {ServiceAffiliation == owner
 			orelse ((((Affiliation == admin orelse Affiliation == owner)
 			andalso NUsers < MaxAdminUsers)
@@ -2431,91 +2439,108 @@ add_new_user(From, Nick, Packet, State) ->
 	  	get_occupant_initial_role(From, Affiliation, StateData)}
 	of
       {false, _, _, _} when NUsers >= MaxUsers orelse NUsers >= MaxAdminUsers ->
-	  ?DEBUG("case1:", []),
-	  Txt = ?T("Too many users in this conference"),
-	  % FIXME: use err_service_unavailable() instead of err_resource_constraint()
-	  % so that VMeeting display correct error message, but is this the correct fix?
-	  Err = xmpp:err_service_unavailable(Txt, Lang),
-	  if not IsSubscribeRequest ->
-		  ejabberd_router:route_error(Packet, Err),
-		  StateData;
-	     true ->
-		  {error, Err}
-	  end;
+		?INFO_MSG("case1:", []),
+		Txt = ?T("Too many users in this conference"),
+		Err = xmpp:err_service_unavailable(Txt, Lang),
+		if not IsSubscribeRequest ->
+			ejabberd_router:route_error(Packet, Err),
+			StateData;
+			true ->
+			{error, Err}
+		end;
       {false, _, _, _} when NConferences >= MaxConferences ->
-	  ?DEBUG("case2:", []),
-	  Txt = ?T("You have joined too many conferences"),
-	  Err = xmpp:err_resource_constraint(Txt, Lang),
-	  if not IsSubscribeRequest ->
-		  ejabberd_router:route_error(Packet, Err),
-		  StateData;
-	     true ->
-		  {error, Err}
-	  end;
+		?INFO_MSG("case2:", []),
+		Txt = ?T("You have joined too many conferences"),
+		Err = xmpp:err_resource_constraint(Txt, Lang),
+		if not IsSubscribeRequest ->
+			ejabberd_router:route_error(Packet, Err),
+			StateData;
+			true ->
+			{error, Err}
+		end;
       {false, _, _, _} ->
-	  ?DEBUG("case3:", []),
-	  Err = xmpp:err_service_unavailable(),
-	  if not IsSubscribeRequest ->
-		  ejabberd_router:route_error(Packet, Err),
-		  StateData;
-	     true ->
-		  {error, Err}
-	  end;
+		?INFO_MSG("case3:", []),
+		Err = xmpp:err_service_unavailable(),
+		if not IsSubscribeRequest ->
+			ejabberd_router:route_error(Packet, Err),
+			StateData;
+			true ->
+			{error, Err}
+		end;
+      {_, _, _, none} when StateData#state.config#config.members_only andalso (IsPasswordMatch == false orelse IsPasswordMatch == need_password) ->
+		?INFO_MSG("case4: ~p ~p", [Affiliation, IsSubscribeRequest]),
+		Err = case Affiliation of
+			outcast ->
+				ErrText = ?T("You have been banned from this room"),
+				xmpp:err_forbidden(ErrText, Lang);
+			_ ->
+				ErrText = ?T("Membership is required to enter this room"),
+				xmpp:err_registration_required(ErrText, Lang)
+			end,
+		if not IsSubscribeRequest ->
+			%% add lobbyroom information in the case lobbyroom is enabled
+			LobbyRoomEl = #xmlel{name = <<"lobbyroom">>,
+								attrs = [{<<"xmlns">>, <<"http://jabber.org/protocol/muc">>}],
+								children = [{xmlcdata, State#state.lobbyroom}]},
+			Els = xmpp:get_els(Packet),
+			ejabberd_router:route_error(xmpp:set_els(Packet, [LobbyRoomEl | Els]), Err),
+			StateData;
+		true ->
+			{error, Err}
+		end;
       {_, true, _, _} ->
-	  ?DEBUG("case5:", []),
-	  ErrText = ?T("That nickname is already in use by another occupant"),
-	  Err = xmpp:err_conflict(ErrText, Lang),
-	  if not IsSubscribeRequest ->
-		  ejabberd_router:route_error(Packet, Err),
-		  StateData;
-	     true ->
-		  {error, Err}
-	  end;
+		?INFO_MSG("case5:", []),
+		ErrText = ?T("That nickname is already in use by another occupant"),
+		Err = xmpp:err_conflict(ErrText, Lang),
+		if not IsSubscribeRequest ->
+			ejabberd_router:route_error(Packet, Err),
+			StateData;
+			true ->
+			{error, Err}
+		end;
       {_, _, false, _} ->
-	  ?DEBUG("case6:", []),
-	  Err = case Nick of
-			<<>> ->
-			    xmpp:err_jid_malformed(?T("Nickname can't be empty"),
-						   Lang);
-			_ ->
-			    xmpp:err_conflict(?T("That nickname is registered"
-						 " by another person"), Lang)
-		    end,
-	  if not IsSubscribeRequest ->
-		  ejabberd_router:route_error(Packet, Err),
-		  StateData;
-	     true ->
-		  {error, Err}
-	  end;
+		?INFO_MSG("case6:", []),
+		Err = case Nick of
+				<<>> ->
+					xmpp:err_jid_malformed(?T("Nickname can't be empty"),
+							Lang);
+				_ ->
+					xmpp:err_conflict(?T("That nickname is registered"
+							" by another person"), Lang)
+				end,
+		if not IsSubscribeRequest ->
+			ejabberd_router:route_error(Packet, Err),
+			StateData;
+			true ->
+			{error, Err}
+		end;
       {_, _, _, Role} ->
-	  ?DEBUG("case7: ~p", [Role]),
-	  case check_password(ServiceAffiliation, Affiliation,
-			      Packet, From, StateData)
-	      of
+	  	?INFO_MSG("case7: ~p", [Role]),
+	  	case check_password(ServiceAffiliation, Affiliation, Packet, From, StateData) of
 	    true ->
-			case Role of
-			none ->
-				?DEBUG("case4:", []),
-				Err = case Affiliation of
-						outcast ->
-						ErrText = ?T("You have been banned from this room"),
-						xmpp:err_forbidden(ErrText, Lang);
-						_ ->
-						ErrText = ?T("Membership is required to enter this room"),
-						xmpp:err_registration_required(ErrText, Lang)
-					end,
-				if not IsSubscribeRequest ->
-					%% add lobbyroom information in the case lobbyroom is enabled
-					LobbyRoomEl = #xmlel{name = <<"lobbyroom">>,
-											attrs = [{<<"xmlns">>, <<"http://jabber.org/protocol/muc">>}],
-											children = [{xmlcdata, State#state.lobbyroom}]},
-					Els = xmpp:get_els(Packet),
-					ejabberd_router:route_error(xmpp:set_els(Packet, [LobbyRoomEl | Els]), Err),
-					StateData;
-					true ->
-					{error, Err}
-				end;
-			_ ->
+			% case Role of
+			% none when (StateData#state.config)#config.password_protected == false ->
+			% 	?INFO_MSG("case4: ~p", [IsSubscribeRequest]),
+			% 	Err = case Affiliation of
+			% 			outcast ->
+			% 			ErrText = ?T("You have been banned from this room"),
+			% 			xmpp:err_forbidden(ErrText, Lang);
+			% 			_ ->
+			% 			ErrText = ?T("Membership is required to enter this room"),
+			% 			xmpp:err_registration_required(ErrText, Lang)
+			% 		end,
+			% 	if not IsSubscribeRequest ->
+			% 		%% add lobbyroom information in the case lobbyroom is enabled
+			% 		LobbyRoomEl = #xmlel{name = <<"lobbyroom">>,
+			% 								attrs = [{<<"xmlns">>, <<"http://jabber.org/protocol/muc">>}],
+			% 								children = [{xmlcdata, State#state.lobbyroom}]},
+			% 		Els = xmpp:get_els(Packet),
+			% 		ejabberd_router:route_error(xmpp:set_els(Packet, [LobbyRoomEl | Els]), Err),
+			% 		StateData;
+			% 	true ->
+			% 		{error, Err}
+			% 	end;
+			% _ ->
 				Nodes = get_subscription_nodes(Packet),
 				NewStateData =
 					if not IsSubscribeRequest ->
@@ -2538,67 +2563,67 @@ add_new_user(From, Nick, Packet, State) ->
 					end,
 				if not IsSubscribeRequest -> ResultState;
 					true -> {result, subscribe_result(Packet), ResultState}
-				end
+				% end
 			end;
 	    need_password ->
-		ErrText = ?T("A password is required to enter this room"),
-		Err = xmpp:err_not_authorized(ErrText, Lang),
-		if not IsSubscribeRequest ->
-			ejabberd_router:route_error(Packet, Err),
-			StateData;
-		   true ->
-			{error, Err}
-		end;
+			ErrText = ?T("A password is required to enter this room"),
+			Err = xmpp:err_not_authorized(ErrText, Lang),
+			if not IsSubscribeRequest ->
+				ejabberd_router:route_error(Packet, Err),
+				StateData;
+			true ->
+				{error, Err}
+			end;
 	    captcha_required ->
-		SID = xmpp:get_id(Packet),
-		RoomJID = StateData#state.jid,
-		To = jid:replace_resource(RoomJID, Nick),
-		Limiter = {From#jid.luser, From#jid.lserver},
-		case ejabberd_captcha:create_captcha(SID, RoomJID, To,
-						     Lang, Limiter, From)
-                   of
-		  {ok, ID, Body, CaptchaEls} ->
-		      MsgPkt = #message{from = RoomJID,
-					to = From,
-					id = ID, body = Body,
-					sub_els = CaptchaEls},
-		      Robots = maps:put(From, {Nick, Packet},
-					StateData#state.robots),
-		      ejabberd_router:route(MsgPkt),
-		      NewState = StateData#state{robots = Robots},
-		      if not IsSubscribeRequest ->
-			      NewState;
-			 true ->
-			      {ignore, NewState}
-		      end;
-		  {error, limit} ->
-		      ErrText = ?T("Too many CAPTCHA requests"),
-		      Err = xmpp:err_resource_constraint(ErrText, Lang),
-		      if not IsSubscribeRequest ->
-			      ejabberd_router:route_error(Packet, Err),
-			      StateData;
-			 true ->
-			      {error, Err}
-		      end;
-		  _ ->
-		      ErrText = ?T("Unable to generate a CAPTCHA"),
-		      Err = xmpp:err_internal_server_error(ErrText, Lang),
-		      if not IsSubscribeRequest ->
-			      ejabberd_router:route_error(Packet, Err),
-			      StateData;
-			 true ->
-			      {error, Err}
-		      end
-		end;
+			SID = xmpp:get_id(Packet),
+			RoomJID = StateData#state.jid,
+			To = jid:replace_resource(RoomJID, Nick),
+			Limiter = {From#jid.luser, From#jid.lserver},
+			case ejabberd_captcha:create_captcha(SID, RoomJID, To,
+								Lang, Limiter, From)
+					of
+			{ok, ID, Body, CaptchaEls} ->
+				MsgPkt = #message{from = RoomJID,
+						to = From,
+						id = ID, body = Body,
+						sub_els = CaptchaEls},
+				Robots = maps:put(From, {Nick, Packet},
+						StateData#state.robots),
+				ejabberd_router:route(MsgPkt),
+				NewState = StateData#state{robots = Robots},
+				if not IsSubscribeRequest ->
+					NewState;
+				true ->
+					{ignore, NewState}
+				end;
+			{error, limit} ->
+				ErrText = ?T("Too many CAPTCHA requests"),
+				Err = xmpp:err_resource_constraint(ErrText, Lang),
+				if not IsSubscribeRequest ->
+					ejabberd_router:route_error(Packet, Err),
+					StateData;
+				true ->
+					{error, Err}
+				end;
+			_ ->
+				ErrText = ?T("Unable to generate a CAPTCHA"),
+				Err = xmpp:err_internal_server_error(ErrText, Lang),
+				if not IsSubscribeRequest ->
+					ejabberd_router:route_error(Packet, Err),
+					StateData;
+				true ->
+					{error, Err}
+				end
+			end;
 	    _ ->
-		ErrText = ?T("Incorrect password"),
-		Err = xmpp:err_not_authorized(ErrText, Lang),
-		if not IsSubscribeRequest ->
-			ejabberd_router:route_error(Packet, Err),
-			StateData;
-		   true ->
-			{error, Err}
-		end
+			ErrText = ?T("Incorrect password"),
+			Err = xmpp:err_not_authorized(ErrText, Lang),
+			if not IsSubscribeRequest ->
+				ejabberd_router:route_error(Packet, Err),
+				StateData;
+			true ->
+				{error, Err}
+			end
 	  end
     end.
 
@@ -4424,6 +4449,7 @@ get_occupant_initial_role(Jid, Affiliation, #state{roles = Roles} = StateData) -
     end.
 
 get_occupant_stored_role(Jid, Roles, DefaultRole) ->
+	?INFO_MSG("get_occupant_stored_role: ~p ~p ~p", [jid:remove_resource(Jid), Roles, DefaultRole]),
     maps:get(jid:split(jid:remove_resource(Jid)), Roles, DefaultRole).
 
 -define(MAKE_CONFIG_OPT(Opt),
@@ -4710,13 +4736,13 @@ iq_disco_info_extras(Lang, StateData, Static) ->
     % ?INFO_MSG("iq_disco_info_extras:", []),
     Config = StateData#state.config,
     Fs1 = [{roomname, Config#config.title},
-	   {created_timestamp, StateData#state.created_timestamp},
+	   {created_timestamp, integer_to_binary(StateData#state.created_timestamp)},
 	   {description, Config#config.description},
 	%    {contactjid, get_owners(StateData)},
 	   {changesubject, Config#config.allow_change_subj},
 	   {allowinvites, Config#config.allow_user_invites},
 	   {allow_query_users, Config#config.allow_query_users},
-	   {allowpm, AllowPM},
+	   {allowpm, Config#config.allowpm},
 	   {lang, Config#config.lang},
 	   {meetingId, Config#config.meeting_id},
 	   {lobbyroom, StateData#state.lobbyroom},
