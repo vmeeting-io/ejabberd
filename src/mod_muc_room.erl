@@ -304,13 +304,17 @@ get_disco_item(Pid, Filter, JID, Lang) ->
 service_notice(Pid, Text) ->
 	SubEl = #xmlel{name = <<"notice">>, children = [{xmlcdata, Text}]},
     MessagePkt = #message{type = groupchat, sub_els = [SubEl]},
-	{ok, StateData} = get_state(Pid),
-    send_wrapped_multiple(
-      StateData#state.jid,
-      get_users_and_subscribers(StateData),
-      MessagePkt,
-      ?NS_MUCSUB_NODES_MESSAGES,
-      StateData).
+	case get_state(Pid) of
+	{ok, StateData} ->
+		send_wrapped_multiple(
+			StateData#state.jid,
+			get_users_and_subscribers(StateData),
+			MessagePkt,
+			?NS_MUCSUB_NODES_MESSAGES,
+			StateData);
+	_ ->
+		{error, notfound}
+	end.
 
 %% Room can be pid() or state(). state() is used when get_state(Pid) is not possible,
 %% e.g., during state change (FIXME: is this even true?)
