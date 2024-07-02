@@ -2002,7 +2002,7 @@ get_role(JID, StateData) ->
 
 -spec get_default_role(affiliation(), state()) -> role().
 get_default_role(Affiliation, StateData) ->
-	?INFO_MSG("get_default_role: ~p ~p ~p ~p", [StateData#state.host, Affiliation, (StateData#state.config)#config.members_only, (StateData#state.config)#config.members_by_default]),
+	% ?INFO_MSG("get_default_role: ~p ~p ~p ~p", [StateData#state.host, Affiliation, (StateData#state.config)#config.members_only, (StateData#state.config)#config.members_by_default]),
     case Affiliation of
       owner -> moderator;
       admin -> moderator;
