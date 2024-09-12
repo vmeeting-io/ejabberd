@@ -44,7 +44,7 @@
 	 get_room_config/4, set_room_option/3, offline_message/1, export/1,
 	 mod_options/1, remove_mam_for_user_with_peer/3, remove_mam_for_user/2,
 	 is_empty_for_user/2, is_empty_for_room/3, check_create_room/4,
-	 process_iq/3, store_mam_message/7, make_id/0, wrap_as_mucsub/2, select/7,
+	 process_iq/3, store_mam_message/8, make_id/0, wrap_as_mucsub/2, select/7,
 	 delete_old_messages_batch/5, delete_old_messages_status/1, delete_old_messages_abort/1,
 	 remove_message_from_archive/3]).
 
@@ -1038,8 +1038,9 @@ store_muc(MUCState, Pkt, RoomJID, Peer, Nick) ->
 	true ->
 	    {U, S, _} = jid:tolower(RoomJID),
 	    LServer = MUCState#state.server_host,
+		  MeetingID = MUCState#state.config#config.meeting_id,
 	    case ejabberd_hooks:run_fold(store_mam_message, LServer, Pkt,
-					 [U, S, Peer, Nick, groupchat, recv]) of
+					 [U, S, Peer, Nick, groupchat, recv, MeetingID]) of
 		#message{} -> ok;
 		_ -> pass
 	    end;
@@ -1047,7 +1048,7 @@ store_muc(MUCState, Pkt, RoomJID, Peer, Nick) ->
 	    pass
     end.
 
-store_mam_message(Pkt, U, S, Peer, Nick, Type, Dir) ->
+store_mam_message(Pkt, U, S, Peer, Nick, Type, Dir, MeetingID) ->
     LServer = ejabberd_router:host_of_route(S),
     US = {U, S},
     ID = get_stanza_id(Pkt),
@@ -1060,7 +1061,7 @@ store_mam_message(Pkt, U, S, Peer, Nick, Type, Dir) ->
               end,
     El = xmpp:encode(Pkt),
     Mod = gen_mod:db_mod(LServer, ?MODULE),
-    Mod:store(El, LServer, US, Type, Peer, Nick, Dir, ID, OriginID, Retract),
+    Mod:store(El, LServer, US, Type, Peer, Nick, Dir, ID, OriginID, MeetingID, Retract),
     Pkt.
 
 write_prefs(LUser, LServer, Host, Default, Always, Never) ->

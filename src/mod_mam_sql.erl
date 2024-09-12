@@ -29,7 +29,7 @@
 
 %% API
 -export([init/2, remove_user/2, remove_room/3, delete_old_messages/3,
-	 extended_fields/0, store/10, write_prefs/4, get_prefs/2, select/7, export/1, remove_from_archive/3,
+	 extended_fields/0, store/11, store/10, write_prefs/4, get_prefs/2, select/7, export/1, remove_from_archive/3,
 	 is_empty_for_user/2, is_empty_for_room/3, select_with_mucsub/6,
 	 delete_old_messages_batch/4, count_messages_to_delete/3]).
 -export([sql_schemas/0]).
@@ -66,6 +66,7 @@ sql_schemas() ->
                      #sql_column{name = <<"kind">>, type = {text, 10}},
                      #sql_column{name = <<"nick">>, type = text},
                      #sql_column{name = <<"origin_id">>, type = text},
+                     #sql_column{name = <<"meeting_id">>, type = text},
                      #sql_column{name = <<"created_at">>, type = timestamp,
                                  default = true}],
                 indices = [#sql_index{
@@ -77,7 +78,9 @@ sql_schemas() ->
                            #sql_index{
                               columns = [<<"server_host">>, <<"timestamp">>]},
                            #sql_index{
-                              columns = [<<"server_host">>, <<"username">>, <<"origin_id">>]}
+                              columns = [<<"server_host">>, <<"username">>, <<"origin_id">>]},
+                           #sql_index{
+                              columns = [<<"meeting_id">>]}
                           ],
                 post_create =
                     fun(#sql_schema_info{db_type = mysql}) ->
@@ -119,6 +122,7 @@ sql_schemas() ->
                      #sql_column{name = <<"id">>, type = bigserial},
                      #sql_column{name = <<"kind">>, type = {text, 10}},
                      #sql_column{name = <<"nick">>, type = text},
+                     #sql_column{name = <<"meeting_id">>, type = text},
                      #sql_column{name = <<"created_at">>, type = timestamp,
                                  default = true}],
                 indices = [#sql_index{
@@ -128,7 +132,9 @@ sql_schemas() ->
                            #sql_index{
                               columns = [<<"server_host">>, <<"username">>, <<"bare_peer">>]},
                            #sql_index{
-                              columns = [<<"server_host">>, <<"timestamp">>]}
+                              columns = [<<"server_host">>, <<"timestamp">>]},
+                           #sql_index{
+                              columns = [<<"meeting_id">>]}
                           ],
                 post_create =
                     fun(#sql_schema_info{db_type = mysql}) ->
@@ -256,6 +262,84 @@ delete_old_messages(ServerHost, TimeStamp, Type) ->
 
 extended_fields() ->
     [{withtext, <<"">>}].
+
+store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS,
+      OriginID, MeetingID, Retract) ->
+    SUser = case Type of
+		chat -> LUser;
+		groupchat -> jid:encode({LUser, LHost, <<>>})
+	    end,
+    BarePeer = jid:encode(
+		 jid:tolower(
+		   jid:remove_resource(Peer))),
+    LPeer = jid:encode(
+	      jid:tolower(Peer)),
+    Body = fxml:get_subtag_cdata(Pkt, <<"body">>),
+    SType = misc:atom_to_binary(Type),
+    SqlType = ejabberd_option:sql_type(LServer),
+    XML = case mod_mam_opt:compress_xml(LServer) of
+	      true ->
+		  J1 = case Type of
+			      chat -> jid:encode({LUser, LHost, <<>>});
+			      groupchat -> SUser
+			  end,
+		  xml_compress:encode(Pkt, J1, LPeer);
+	      _ ->
+		  fxml:element_to_binary(Pkt)
+	  end,
+    case Retract of
+        {true, RID} ->
+            ejabberd_sql:sql_query(
+              LServer,
+              ?SQL("delete from archive"
+                   " where username=%(SUser)s"
+                   " and %(LServer)H"
+                   " and bare_peer=%(BarePeer)s"
+                   " and origin_id=%(RID)s"));
+        false -> ok
+    end,
+    case SqlType of
+        mssql -> case ejabberd_sql:sql_query(
+	           LServer,
+	           ?SQL_INSERT(
+	              "archive",
+	              ["username=%(SUser)s",
+	               "server_host=%(LServer)s",
+	               "timestamp=%(TS)d",
+	               "peer=%(LPeer)s",
+	               "bare_peer=%(BarePeer)s",
+	               "xml=N%(XML)s",
+	               "txt=N%(Body)s",
+	               "kind=%(SType)s",
+	               "nick=%(Nick)s",
+                 "meeting_id=%(MeetingID)s",
+	               "origin_id=%(OriginID)s"])) of
+		{updated, _} ->
+		    ok;
+		Err ->
+		    Err
+	    end;
+        _ -> case ejabberd_sql:sql_query(
+	           LServer,
+	           ?SQL_INSERT(
+	              "archive",
+	              ["username=%(SUser)s",
+	               "server_host=%(LServer)s",
+	               "timestamp=%(TS)d",
+	               "peer=%(LPeer)s",
+	               "bare_peer=%(BarePeer)s",
+	               "xml=%(XML)s",
+	               "txt=%(Body)s",
+	               "kind=%(SType)s",
+	               "nick=%(Nick)s",
+                 "meeting_id=%(MeetingID)s",
+	               "origin_id=%(OriginID)s"])) of
+		{updated, _} ->
+		    ok;
+		Err ->
+		    Err
+	    end
+    end.
 
 store(Pkt, LServer, {LUser, LHost}, Type, Peer, Nick, _Dir, TS,
       OriginID, Retract) ->
