@@ -271,6 +271,10 @@ CREATE INDEX i_archive_sh_username_bare_peer ON archive USING btree (server_host
 CREATE INDEX i_archive_sh_timestamp ON archive USING btree (server_host, timestamp);
 CREATE INDEX i_archive_sh_username_origin_id ON archive USING btree (server_host, username, origin_id);
 
+-- To update 'archive' for meeting_id from selvas
+ALTER TABLE archive ADD COLUMN meeting_id TEXT;
+CREATE INDEX i_archive_sh_meeting_id ON archive (meeting_id);
+
 -- To update 'archive' from ejabberd <= 23.10:
 -- ALTER TABLE archive ADD COLUMN origin_id text NOT NULL DEFAULT '';
 -- ALTER TABLE archive ALTER COLUMN origin_id DROP DEFAULT;
